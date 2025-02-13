@@ -1,0 +1,67 @@
+# .github/workflows/deploy.yml
+
+name: Deploy to Google Cloud
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout Repository
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      # Step 2: Authenticate with Google Cloud
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v0
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      # Step 3: Set up Cloud SDK
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      # Step 4: Configure Docker Authentication
+      - name: Configure Docker Authentication
+        run: |
+          gcloud auth configure-docker us-docker.pkg.dev
+
+      # Step 5: Build and Push Data Preparation Docker Image
+      - name: Build and Push Data Preparation Image
+        run: |
+          docker build -f data_preparation/Dockerfile -t us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/data-preparation:latest .
+          docker push us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/data-preparation:latest
+
+      # Step 6: Build and Push Inference Docker Image
+      - name: Build and Push Inference Image
+        run: |
+          docker build -f inference/Dockerfile -t us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/inference:latest .
+          docker push us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/inference:latest
+
+      # Step 7: Deploy Data Preparation to Cloud Run
+      - name: Deploy Data Preparation to Cloud Run
+        run: |
+          gcloud run deploy data-preparation \
+            --image us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/data-preparation:latest \
+            --platform managed \
+            --region us-central1 \
+            --no-allow-unauthenticated
+            --set-env-vars api_key=${{ secrets.API_KEY }}, api_base=${{ secrets.API_BASE }}
+
+      # Step 8: Deploy Inference to Cloud Run
+      - name: Deploy Inference to Cloud Run
+        run: |
+          gcloud run deploy inference \
+            --image us-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/gcr.io/inference:latest \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --set-env-vars api_key=${{ secrets.API_KEY }}, api_base=${{ secrets.API_BASE }} \
+            --port 8000
