@@ -38,8 +38,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
         # Validate directories section
         required_dirs = [
             'data_directory', 'to_process_dir', 'processed_dir',
-            'whoosh_index_path', 'faiss_index_path',
-            'inference_log_folder', 'data_preparation_log_folder'
+            'whoosh_index_path', 'faiss_index_path', 'log_folder'
         ]
         
         for dir_name in required_dirs:
