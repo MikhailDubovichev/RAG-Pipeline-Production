@@ -20,7 +20,7 @@ The data preparation pipeline is responsible for processing documents and creati
      - `file_service.py`: Handles file operations and tracking
    - `utils/`:
      - `config_utils.py`: Configuration management
-     - `logging_utils.py`: Logging setup and management
+     - `logging_utils.py`: Centralized logging setup and management for all pipeline components
 
 3. **Document Processing Flow**:
    ```
@@ -283,7 +283,7 @@ rag_pipeline/
   - `word_processor.py`: Word document processing
   
 - `utils/`: Utility functions
-  - `logging_utils.py`: Logging configuration
+  - `logging_utils.py`: Centralized logging configuration
   - `file_utils.py`: File operations
   - `index_utils.py`: Index management
 
@@ -294,7 +294,7 @@ rag_pipeline/
   - `llm_service.py`: LLM interaction
   
 - `utils/`: Support utilities
-  - `logging_utils.py`: Logging setup
+  - `logging_utils.py`: Centralized logging configuration
   - `response_formatter.py`: Response formatting
 
 #### `config/`

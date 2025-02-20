@@ -77,7 +77,7 @@ def initialize_services(config_data, api_key, api_base):
     }
     """
     # Setup embedding model with extended timeout
-    custom_http_client = httpx.Client(timeout=60.0)  # 60-second timeout for API calls
+    custom_http_client = httpx.Client(timeout=60.0)  # This timeout is just an "ugly hack" - without argument httpx.client() didn't
     embedding_model = NebiusEmbedding(
         api_key=api_key,
         model_name=config_data['embedding_model']['model_name'],
@@ -433,7 +433,7 @@ def build_gradio_interface():
         gr.Markdown("# Data Preparation Pipeline")
         
         with gr.Tab("Upload"):
-            file_input = gr.File(label="Upload File", type="file")
+            file_input = gr.File(label="Upload File")
             upload_button = gr.Button("Upload")
             upload_output = gr.Textbox(label="Upload Status")
             upload_button.click(
@@ -479,41 +479,52 @@ def main():
         doc_processor, indexing_service, file_service = initialize_services(config, api_key, api_base)
         
         if os.getenv("CI") is None:
-            # Try different ports for FastAPI
+            # Launch FastAPI with port retry
             fastapi_port = None
             for port in range(8080, 8090):
                 try:
+                    # Create the server without starting it
+                    config = uvicorn.Config(app, host="0.0.0.0", port=port)
+                    server = uvicorn.Server(config)
+                    
+                    # Start the server in a thread
                     uvicorn_thread = threading.Thread(
-                        target=lambda: uvicorn.run(app, host="0.0.0.0", port=port)
+                        target=server.run
                     )
+                    uvicorn_thread.daemon = True  # Make thread daemon so it exits when main thread exits
                     uvicorn_thread.start()
+                    
                     fastapi_port = port
                     logging.info(f"FastAPI interface launched on port {port}")
                     break
                 except Exception as e:
+                    logging.warning(f"Port {port} is in use, trying next port")
                     if port == 8089:  # Last attempt
                         raise Exception(f"Could not find available port for FastAPI: {e}")
                     continue
 
-            # Launch Gradio interface
+            # Launch Gradio interface with port retry
             demo = build_gradio_interface()
+            gradio_port = None
             
-            # Try different ports for Gradio
             for port in range(7860, 7870):
                 try:
                     demo.launch(
                         server_name="0.0.0.0",
                         server_port=port,
-                        share=False
+                        share=False,
+                        quiet=True  # Reduce console output
                     )
+                    gradio_port = port
                     logging.info(f"Gradio interface launched on port {port}")
                     break
                 except Exception as e:
+                    logging.warning(f"Port {port} is in use, trying next port")
                     if port == 7869:  # Last attempt
                         raise Exception(f"Could not find available port for Gradio: {e}")
                     continue
                     
-            logging.info(f"Services running - FastAPI on port {fastapi_port}, Gradio on port {port}")
+            logging.info(f"Services running - FastAPI on port {fastapi_port}, Gradio on port {gradio_port}")
             
         else:
             logging.info("CI/CD environment detected. Running processing only.")
