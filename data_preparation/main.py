@@ -33,7 +33,7 @@ from llama_index.core import Settings  # Global settings for LlamaIndex
 
 # Local imports from our pipeline
 from .services import DocumentProcessor, IndexingService, FileService  # Core services
-from .utils import load_config, load_environment, setup_directories  # Utility functions
+from common.config_utils import load_config, load_environment, setup_directories  # Configuration utilities
 from common.logging_utils import setup_logging  # Logging configuration
 
 # Initialize FastAPI app with title
