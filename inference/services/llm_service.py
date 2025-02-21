@@ -106,6 +106,9 @@ class LLMService:
             - Preserves system stability
         """
         try:
+            logging.info(f"Generating response for query: {query}")
+            logging.info(f"Context length: {len(context)} characters")
+            
             # Construct RAG-optimized prompt
             prompt = (
                 f"Question: {query}\n\n"
@@ -114,12 +117,19 @@ class LLMService:
                 "Respond with 'Yes' or 'No'. If yes, provide the answer; otherwise, say 'No relevant information available.'"
             )
             
+            logging.info("Sending request to LLM")
             # Generate response using LLM
             response = self.llm.complete(prompt=prompt)
+            
+            if not response:
+                logging.warning("LLM returned empty response")
+                return "I couldn't generate a response. Please try again.", []
+                
+            logging.info(f"LLM response received, length: {len(response.text)}")
             return response.text.strip(), []
             
         except Exception as e:
-            logging.error(f"LLM generation failed: {e}")
+            logging.error(f"LLM generation failed: {str(e)}", exc_info=True)
             return "An error occurred while generating the response. Please try again later.", []
 
     def format_response_with_references(self, 
