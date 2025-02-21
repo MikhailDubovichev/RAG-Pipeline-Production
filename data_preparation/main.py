@@ -33,6 +33,7 @@ from llama_index.core import Settings  # Global settings for LlamaIndex
 
 # Local imports from our pipeline
 from .services import DocumentProcessor, IndexingService, FileService  # Core services
+from .ui.gradio_interface import GradioInterface  # Gradio interface
 from common.config_utils import load_config, load_environment, setup_directories  # Configuration utilities
 from common.logging_utils import setup_logging  # Logging configuration
 
@@ -289,180 +290,6 @@ async def process_files():
             content={"message": f"Document processing failed: {str(e)}"}
         )
 
-# Gradio interface functions for web UI
-def upload_file_gradio(file):
-    """
-    Handle file upload through the Gradio web interface.
-    
-    This function provides a more user-friendly interface for file uploads with:
-    1. File type validation
-    2. Automatic handling of duplicate filenames
-    3. File integrity checks
-    4. Detailed feedback messages
-    
-    Process:
-    1. Validate file type
-    2. Generate unique filename if needed
-    3. Copy file to processing directory
-    4. Verify successful copy
-    
-    Args:
-        file: Gradio file object containing:
-            - name: Original filename
-            - size: File size in bytes
-            
-    Returns:
-        str: Success or error message for display in the UI
-        
-    Error Handling:
-    - Checks file extension
-    - Verifies file size > 0
-    - Handles duplicate filenames
-    - Provides detailed error messages
-    """
-    global config
-    
-    if file is None:
-        return "No file provided."
-        
-    try:
-        # Log the incoming file details
-        logging.info(f"Attempting to upload file: {file.name}")
-        
-        # Verify file extension against supported types
-        file_ext = Path(file.name).suffix.lower()
-        if file_ext not in ['.pdf', '.xlsx', '.xls', '.pptx', '.ppt', '.docx', '.doc']:
-            error_msg = f"Unsupported file type: {file_ext}. Supported types: PDF, Excel, PowerPoint, Word"
-            logging.error(error_msg)
-            return error_msg
-        
-        # Get the to_process directory from config
-        if not isinstance(config, dict):
-            raise TypeError("Configuration not properly loaded")
-            
-        to_process_dir = Path(config.get('directories', {}).get('to_process_dir'))
-        if not to_process_dir:
-            raise ValueError("to_process_dir not found in configuration")
-            
-        # Calculate target path in the processing directory
-        target_path = to_process_dir / Path(file.name).name
-        logging.info(f"Target path: {target_path}")
-        
-        # Create directory if it doesn't exist
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Handle duplicate filenames by adding timestamp
-        if target_path.exists():
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            target_path = target_path.with_name(f"{target_path.stem}_{timestamp}{target_path.suffix}")
-            logging.info(f"File already exists, using new path: {target_path}")
-
-        # Copy file with metadata preservation
-        try:
-            shutil.copy2(file.name, target_path)
-            logging.info(f"File copied from {file.name} to {target_path}")
-        except Exception as e:
-            error_msg = f"Error copying file: {str(e)}"
-            logging.error(error_msg)
-            return error_msg
-            
-        # Verify file was copied successfully and has content
-        if target_path.exists():
-            file_size = target_path.stat().st_size
-            if file_size == 0:
-                error_msg = f"Error: File {target_path.name} is empty"
-                logging.error(error_msg)
-                # Remove empty file
-                target_path.unlink()
-                return error_msg
-                
-            success_msg = (
-                f"File {target_path.name} uploaded successfully (size: {file_size:,} bytes).\n"
-                "Click 'Process Documents' to process the file."
-            )
-            logging.info(f"File {target_path.name} uploaded successfully to {target_path} (size: {file_size} bytes)")
-            return success_msg
-        else:
-            error_msg = f"File copy failed: {file.name} not found at target location"
-            logging.error(error_msg)
-            return error_msg
-            
-    except Exception as e:
-        error_msg = f"File upload failed: {str(e)}"
-        logging.error(error_msg)
-        logging.exception("Detailed error information:")
-        return error_msg
-
-def process_files_gradio():
-    """
-    Process documents through the Gradio web interface.
-    
-    This function:
-    1. Checks for files in the to_process directory
-    2. Triggers the document processing pipeline
-    3. Provides user feedback on the process
-    
-    The processing includes:
-    - Loading and chunking documents
-    - Updating search indices
-    - Moving files to archive
-    - Updating processing records
-    
-    Returns:
-        str: Message indicating success/failure and number of documents processed
-    """
-    try:
-        # Log the start of processing
-        logging.info("Starting document processing via Gradio interface")
-        
-        # Check for files to process
-        to_process_dir = Path(config['directories']['to_process_dir'])
-        files = list(to_process_dir.glob("*.*"))
-        logging.info(f"Found {len(files)} files in {to_process_dir}")
-        
-        if not files:
-            return "No files found in the to_process directory."
-        
-        # Process the documents and get count
-        num_processed = process_documents(doc_processor, indexing_service, file_service, config)
-        
-        # Log and return results
-        result_msg = f"Processed {num_processed} new documents."
-        logging.info(result_msg)
-        return result_msg
-        
-    except Exception as e:
-        error_msg = f"Processing failed: {str(e)}"
-        logging.error(error_msg)
-        logging.exception("Detailed error information:")
-        return error_msg
-
-def build_gradio_interface():
-    with gr.Blocks() as demo:
-        gr.Markdown("# Data Preparation Pipeline")
-        
-        with gr.Tab("Upload"):
-            file_input = gr.File(label="Upload File")
-            upload_button = gr.Button("Upload")
-            upload_output = gr.Textbox(label="Upload Status")
-            upload_button.click(
-                fn=upload_file_gradio,
-                inputs=file_input,
-                outputs=upload_output
-            )
-            
-        with gr.Tab("Process"):
-            process_button = gr.Button("Process Documents")
-            process_output = gr.Textbox(label="Processing Status")
-            process_button.click(
-                fn=process_files_gradio,
-                inputs=None,
-                outputs=process_output
-            )
-    
-    return demo
-
 def main():
     global config, doc_processor, indexing_service, file_service
     
@@ -513,17 +340,16 @@ def main():
                         raise Exception(f"Could not find available port for FastAPI: {e}")
                     continue
 
-            # Launch Gradio interface with port retry
-            demo = build_gradio_interface()
+            # Launch Gradio interface
+            gradio_ui = GradioInterface(doc_processor, indexing_service, file_service, config)
             gradio_port = None
             
             for port in range(7860, 7870):
                 try:
-                    demo.launch(
+                    gradio_ui.launch(
                         server_name="0.0.0.0",
                         server_port=port,
-                        share=False,
-                        quiet=True  # Reduce console output
+                        share=False
                     )
                     gradio_port = port
                     logging.info(f"Gradio interface launched on port {port}")
