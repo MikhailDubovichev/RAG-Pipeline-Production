@@ -320,6 +320,8 @@ def upload_file_gradio(file):
     - Handles duplicate filenames
     - Provides detailed error messages
     """
+    global config
+    
     if file is None:
         return "No file provided."
         
@@ -334,8 +336,16 @@ def upload_file_gradio(file):
             logging.error(error_msg)
             return error_msg
         
+        # Get the to_process directory from config
+        if not isinstance(config, dict):
+            raise TypeError("Configuration not properly loaded")
+            
+        to_process_dir = Path(config.get('directories', {}).get('to_process_dir'))
+        if not to_process_dir:
+            raise ValueError("to_process_dir not found in configuration")
+            
         # Calculate target path in the processing directory
-        target_path = Path(config['directories']['to_process_dir']) / Path(file.name).name
+        target_path = to_process_dir / Path(file.name).name
         logging.info(f"Target path: {target_path}")
         
         # Create directory if it doesn't exist
@@ -484,8 +494,8 @@ def main():
             for port in range(8080, 8090):
                 try:
                     # Create the server without starting it
-                    config = uvicorn.Config(app, host="0.0.0.0", port=port)
-                    server = uvicorn.Server(config)
+                    uvicorn_config = uvicorn.Config(app, host="0.0.0.0", port=port)
+                    server = uvicorn.Server(uvicorn_config)
                     
                     # Start the server in a thread
                     uvicorn_thread = threading.Thread(
