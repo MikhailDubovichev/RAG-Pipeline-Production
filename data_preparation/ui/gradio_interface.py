@@ -12,6 +12,7 @@ import gradio as gr
 from pathlib import Path
 import shutil
 from datetime import datetime
+from ..api.routes import DataPrepService
 
 class GradioInterface:
     def __init__(self, doc_processor, indexing_service, file_service, config):
@@ -24,11 +25,15 @@ class GradioInterface:
             file_service (FileService): Service for file operations
             config (dict): Configuration settings
         """
-        self.doc_processor = doc_processor
-        self.indexing_service = indexing_service
-        self.file_service = file_service
         self.config = config
-        logging.info("GradioInterface initialized with required services")
+        # Create DataPrepService instance for handling business logic
+        self.data_prep_service = DataPrepService(
+            doc_processor,
+            indexing_service,
+            file_service,
+            config
+        )
+        logging.info("GradioInterface initialized with DataPrepService")
 
     def upload_file_gradio(self, file):
         """
@@ -120,18 +125,9 @@ class GradioInterface:
             if not files:
                 return "No files found in the to_process directory."
             
-            # Process the documents
-            from data_preparation.main import process_documents
-            num_processed = process_documents(
-                self.doc_processor,
-                self.indexing_service,
-                self.file_service,
-                self.config
-            )
-            
-            result_msg = f"Processed {num_processed} new documents."
-            logging.info(result_msg)
-            return result_msg
+            # Use DataPrepService to handle document processing
+            result = self.data_prep_service.process_documents_with_response()
+            return result["message"]
             
         except Exception as e:
             error_msg = f"Processing failed: {str(e)}"

@@ -1,7 +1,7 @@
 """
 Main entry point for the data preparation pipeline.
 
-This module serves as the core of the data preparation process in the RAG (Retrieval-Augmented Generation) pipeline.
+This module serves as the core of the data preparation process in the RAG pipeline.
 It provides both API endpoints (via FastAPI) and a user interface (via Gradio) for:
 1. Uploading documents (PDF, Excel, PowerPoint, Word)
 2. Processing these documents into chunks
@@ -34,11 +34,13 @@ from llama_index.core import Settings  # Global settings for LlamaIndex
 # Local imports from our pipeline
 from .services import DocumentProcessor, IndexingService, FileService  # Core services
 from .ui.gradio_interface import GradioInterface  # Gradio interface
+from .api.routes import router, initialize_routes  # API routes
 from common.config_utils import load_config, load_environment, setup_directories  # Configuration utilities
 from common.logging_utils import setup_logging  # Logging configuration
 
 # Initialize FastAPI app with title
 app = FastAPI(title="Data Preparation Pipeline API")
+app.include_router(router)
 
 # Global service instances
 # These will be initialized when the application starts
@@ -104,193 +106,8 @@ def initialize_services(config_data, api_key, api_base):
     
     return document_processor, indexing_service, file_service
 
-def process_documents(doc_processor: DocumentProcessor, 
-                     indexing_service: IndexingService,
-                     file_service: FileService,
-                     config: dict):
-    """
-    Core function that processes new documents and updates search indices.
-    
-    This function performs the main document processing workflow:
-    1. Loads records of previously processed files
-    2. Identifies new files that need processing
-    3. Processes documents by type (PDF, Excel, PowerPoint, Word)
-    4. Updates search indices with new content
-    5. Moves processed files to archive
-    6. Updates processing records
-    
-    The function maintains separate records for each file type to allow
-    for type-specific processing and better error isolation.
-    
-    Processing Flow:
-    1. Load records -> Find new files -> Process files -> Update indices
-    2. After successful processing: Move files -> Update records
-    
-    Args:
-        doc_processor (DocumentProcessor): Service for loading and chunking documents
-        indexing_service (IndexingService): Service for managing search indices
-        file_service (FileService): Service for file operations
-        config (dict): Configuration containing directory paths
-        
-    Returns:
-        int: Number of new documents processed
-        
-    Raises:
-        Exception: Any error during processing is logged and re-raised
-    """
-    try:
-        # Get paths for record keeping - separate records for each file type
-        processed_files_record_pdf = Path(config['directories']['processed_dir']) / "processed_files_pdf.json"
-        processed_files_record_excel = Path(config['directories']['processed_dir']) / "processed_files_excel.json"
-        processed_files_record_ppt = Path(config['directories']['processed_dir']) / "processed_files_ppt.json"
-        processed_files_record_doc = Path(config['directories']['processed_dir']) / "processed_files_doc.json"
-
-        # Load records of previously processed files for each type
-        processed_files_pdf = file_service.load_processed_files(processed_files_record_pdf)
-        processed_files_excel = file_service.load_processed_files(processed_files_record_excel)
-        processed_files_ppt = file_service.load_processed_files(processed_files_record_ppt)
-        processed_files_doc = file_service.load_processed_files(processed_files_record_doc)
-
-        # Get all files by type from the input directory
-        pdf_files, excel_files, ppt_files, doc_files = file_service.get_files_by_type()
-
-        # Identify new files that haven't been processed yet
-        new_pdf_files = file_service.get_new_files(pdf_files, processed_files_pdf)
-        new_excel_files = file_service.get_new_files(excel_files, processed_files_excel)
-        new_ppt_files = file_service.get_new_files(ppt_files, processed_files_ppt)
-        new_doc_files = file_service.get_new_files(doc_files, processed_files_doc)
-
-        # Process new documents by type and collect all processed documents
-        all_new_docs = []
-        
-        # Process PDFs if any new ones exist
-        if new_pdf_files:
-            pdf_docs = doc_processor.load_pdf_docs(new_pdf_files)
-            all_new_docs.extend(pdf_docs)
-            
-        # Process Excel files if any new ones exist
-        if new_excel_files:
-            excel_docs = doc_processor.load_excel_docs(new_excel_files)
-            all_new_docs.extend(excel_docs)
-            
-        # Process PowerPoint files if any new ones exist
-        if new_ppt_files:
-            ppt_docs = doc_processor.load_ppt_docs(new_ppt_files)
-            all_new_docs.extend(ppt_docs)
-            
-        # Process Word documents if any new ones exist
-        if new_doc_files:
-            doc_docs = doc_processor.load_doc_docs(new_doc_files)
-            all_new_docs.extend(doc_docs)
-
-        # If we have any new documents, update indices and move files
-        if all_new_docs:
-            # Update both Whoosh (keyword) and FAISS (semantic) indices
-            indexing_service.create_or_update_whoosh_index(
-                all_new_docs, 
-                Path(config['directories']['whoosh_index_path'])
-            )
-            indexing_service.create_or_update_faiss_index(
-                all_new_docs, 
-                Path(config['directories']['faiss_index_path'])
-            )
-
-            # Move all processed files to the archive directory
-            file_service.move_to_processed(new_pdf_files)
-            file_service.move_to_processed(new_excel_files)
-            file_service.move_to_processed(new_ppt_files)
-            file_service.move_to_processed(new_doc_files)
-
-            # Update processing records for each file type
-            file_service.update_processed_files_record(processed_files_record_pdf, new_pdf_files)
-            file_service.update_processed_files_record(processed_files_record_excel, new_excel_files)
-            file_service.update_processed_files_record(processed_files_record_ppt, new_ppt_files)
-            file_service.update_processed_files_record(processed_files_record_doc, new_doc_files)
-
-        return len(all_new_docs)
-    except Exception as e:
-        logging.error(f"Error in document processing: {e}")
-        raise
-
-# FastAPI endpoints for REST API access
-@app.post("/upload")
-async def upload_file(file: UploadFile):
-    """
-    FastAPI endpoint for uploading a single file to the processing pipeline.
-    
-    This endpoint:
-    1. Receives a file through HTTP POST request
-    2. Saves it to the to_process directory
-    3. Returns a success/error message
-    
-    The file will be processed later when the /process endpoint is called.
-    
-    Args:
-        file (UploadFile): File object from the HTTP request
-            Supported formats: PDF, Excel (.xls, .xlsx), 
-            PowerPoint (.ppt, .pptx), Word (.doc, .docx)
-            
-    Returns:
-        dict: Message indicating success or failure
-        
-    HTTP Status Codes:
-        200: File uploaded successfully
-        500: Upload failed (with error details)
-    """
-    try:
-        # Create full path for saving the file
-        file_path = Path(config['directories']['to_process_dir']) / file.filename
-        
-        # Save the uploaded file
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
-            
-        logging.info(f"File {file.filename} uploaded successfully.")
-        return {"message": f"File {file.filename} uploaded successfully."}
-        
-    except Exception as e:
-        logging.error(f"Error uploading file: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"message": f"File upload failed: {str(e)}"}
-        )
-
-@app.post("/process")
-async def process_files():
-    """
-    FastAPI endpoint that triggers the document processing pipeline.
-    
-    This endpoint:
-    1. Processes all new files in the to_process directory
-    2. Updates search indices with new content
-    3. Moves processed files to the archive
-    
-    The processing includes:
-    - Text extraction from documents
-    - Chunking the text into smaller pieces
-    - Creating/updating search indices
-    - Moving processed files to archive
-    
-    Returns:
-        dict: Message indicating number of documents processed
-        
-    HTTP Status Codes:
-        200: Processing completed successfully
-        500: Processing failed (with error details)
-    """
-    try:
-        # Process all new documents and get count
-        num_processed = process_documents(doc_processor, indexing_service, file_service, config)
-        return {"message": f"Processed {num_processed} new documents."}
-        
-    except Exception as e:
-        logging.error(f"Error processing documents: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"message": f"Document processing failed: {str(e)}"}
-        )
-
 def main():
+    """Main entry point for the application."""
     global config, doc_processor, indexing_service, file_service
     
     try:
@@ -314,6 +131,9 @@ def main():
         
         # Initialize services
         doc_processor, indexing_service, file_service = initialize_services(config, api_key, api_base)
+        
+        # Initialize API routes
+        initialize_routes(doc_processor, indexing_service, file_service, config)
         
         if os.getenv("CI") is None:
             # Launch FastAPI with port retry
@@ -364,7 +184,8 @@ def main():
             
         else:
             logging.info("CI/CD environment detected. Running processing only.")
-            process_documents(doc_processor, indexing_service, file_service, config)
+            from .api.routes import data_prep_service
+            data_prep_service.process_documents()
             
     except Exception as e:
         logging.error(f"Application startup failed: {e}")
