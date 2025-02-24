@@ -1,7 +1,16 @@
+"""Common configuration utilities for the RAG pipeline.
+
+This module provides centralized configuration management for both data preparation
+and inference pipelines. It handles:
+1. Loading and validating JSON configuration
+2. Managing environment variables
+3. Setting up required directories
+"""
+
 import json
 import os
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 from dotenv import load_dotenv
 
 class ConfigurationError(Exception):
@@ -52,7 +61,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
     except Exception as e:
         raise ConfigurationError(f"Error loading config: {e}")
 
-def load_environment() -> tuple[str, str]:
+def load_environment() -> Tuple[str, str]:
     """
     Load and validate environment variables.
     
@@ -79,7 +88,7 @@ def setup_directories(config: Dict[str, Any]) -> Dict[str, Path]:
     Create necessary directories from configuration.
     
     Args:
-        config: Configuration dictionary
+        config: Configuration dictionary containing directory paths
         
     Returns:
         Dictionary of Path objects for each directory

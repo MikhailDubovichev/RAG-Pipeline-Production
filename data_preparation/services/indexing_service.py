@@ -226,76 +226,99 @@ class IndexingService:
         """
         Create or update the FAISS index for semantic search.
         
-        This method handles:
-        1. Vector index creation/loading
-        2. Document embedding generation
-        3. Storage context management
-        4. Index persistence
-        
-        The process:
-        1. Check for existing index
-        2. Create/load appropriate storage context
-        3. Convert documents to vectors
-        4. Update index
-        5. Persist changes
-        
-        Args:
-            documents (List[Document]): Documents to index
-            index_path (Path): Directory for index storage
-            
-        Technical Details:
-        - Uses IndexFlatIP (Inner Product) for similarity
-        - Automatically handles vector dimensionality
-        - Maintains document-vector mapping
-        - Supports incremental updates
-        
-        Raises:
-            Exception: If index creation/update fails
-            
-        Note:
-            The index is persisted to two files:
-            - vector_store.faiss: Vector data
-            - docstore.json: Document metadata
+        This method will:
+        1. Try to load and update existing index if present
+        2. Create new index only if none exists
+        3. Store index only in .faiss format to avoid duplication
         """
         try:
+            faiss_file = "default__vector_store.faiss"
+            logging.info(f"Attempting to create/update FAISS index at {index_path / faiss_file}")
+            
+            # Create directory if it doesn't exist
+            index_path.mkdir(parents=True, exist_ok=True)
+            logging.info(f"Ensured index directory exists: {index_path}")
+            
             # Check for existing index
-            if (index_path / "vector_store.faiss").exists():
-                # Load and update existing index
-                vector_store = FaissVectorStore.from_persist_path(
-                    str(index_path / "vector_store.faiss")
-                )
-                storage_context = StorageContext.from_defaults(
-                    vector_store=vector_store,
-                    persist_dir=str(index_path)
-                )
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    storage_context=storage_context,
-                    embedding=self.embedding_model
-                )
-                logger.info("Updated existing FAISS index")
+            if (index_path / faiss_file).exists():
+                logging.info(f"Found existing FAISS index at {index_path / faiss_file}")
+                try:
+                    # Load existing index
+                    vector_store = FaissVectorStore.from_persist_path(
+                        str(index_path / faiss_file)
+                    )
+                    storage_context = StorageContext.from_defaults(
+                        vector_store=vector_store,
+                        docstore=SimpleDocumentStore(),
+                        index_store=SimpleIndexStore(),
+                        persist_dir=str(index_path)
+                    )
+                    logging.info("Successfully loaded existing index")
+                    
+                    # Update with new documents
+                    logging.info(f"Updating existing index with {len(documents)} new documents")
+                    index = VectorStoreIndex.from_documents(
+                        documents,
+                        storage_context=storage_context,
+                        embedding=self.embedding_model,
+                        show_progress=True
+                    )
+                    logging.info("Successfully updated existing index")
+                except Exception as load_error:
+                    logging.error(f"Failed to load existing index: {str(load_error)}")
+                    raise
             else:
+                logging.info("No existing index found, creating new one")
                 # Create new index with inner product similarity
                 vector_store = FaissVectorStore(
                     faiss.IndexFlatIP(self.embedding_dimension)
                 )
                 storage_context = StorageContext.from_defaults(
                     vector_store=vector_store,
-                    docstore=SimpleDocumentStore(),  # Store document metadata
-                    index_store=SimpleIndexStore(),  # Store index metadata
-                    persist_dir=str(index_path),
+                    docstore=SimpleDocumentStore(),
+                    index_store=SimpleIndexStore(),
+                    persist_dir=str(index_path)
                 )
+                
+                # Create index from documents
+                logging.info(f"Creating new index with {len(documents)} documents")
                 index = VectorStoreIndex.from_documents(
                     documents,
                     storage_context=storage_context,
-                    embedding=self.embedding_model
+                    embedding=self.embedding_model,
+                    show_progress=True
                 )
-                logger.info("Created new FAISS index")
+                logging.info("Created new FAISS index in memory")
 
-            # Persist index and metadata
-            index.storage_context.persist(persist_dir=str(index_path))
-            logger.info(f"FAISS index persisted at {index_path}")
+            # Persist only necessary components
+            logging.info(f"Attempting to persist index to {index_path}")
+            try:
+                # Persist vector store in FAISS format only
+                vector_store.persist(persist_path=str(index_path / faiss_file))
+                logging.info("Vector store persisted in FAISS format")
+                
+                # Persist only metadata and supporting files (docstore, index_store)
+                # but skip persisting the vector store again in JSON format
+                storage_context.persist(persist_dir=str(index_path))
+                logging.info("Supporting metadata persisted successfully")
+                
+                # Clean up any duplicate vector store in JSON format if it exists
+                json_file = index_path / "default__vector_store.json"
+                if json_file.exists():
+                    json_file.unlink()
+                    logging.info("Removed duplicate JSON vector store")
+                
+            except Exception as persist_error:
+                logging.error(f"Error during persistence: {str(persist_error)}", exc_info=True)
+                raise
+            
+            # Verify the index was saved
+            if (index_path / faiss_file).exists():
+                file_size = (index_path / faiss_file).stat().st_size
+                logging.info(f"FAISS index successfully persisted at {index_path / faiss_file} (size: {file_size:,} bytes)")
+            else:
+                raise FileNotFoundError(f"FAISS index file not found after persistence attempt: {index_path / faiss_file}")
 
         except Exception as e:
-            logger.error(f"Failed to create/update FAISS index: {e}")
+            logging.error(f"Failed to create/update FAISS index: {str(e)}", exc_info=True)
             raise 

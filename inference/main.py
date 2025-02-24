@@ -26,7 +26,6 @@ import threading  # Thread-based parallelism
 # External dependencies
 import httpx  # Modern HTTP client with timeout support
 import uvicorn  # ASGI server implementation
-import gradio as gr  # Framework for creating web UI
 from fastapi import FastAPI  # Framework for building REST APIs
 from sentence_transformers import CrossEncoder  # Model for reranking search results
 
@@ -47,11 +46,13 @@ from whoosh.index import open_dir  # Keyword search engine
 try:
     from inference.services import SearchService, LLMService  # Core services
     from inference.api.routes import router, initialize_routes  # API endpoints
-    from inference.utils import load_config, load_environment, setup_directories  # Utilities
+    from inference.ui.gradio_interface import GradioInterface  # Gradio interface
+    from common.config_utils import load_config, load_environment, setup_directories  # Configuration utilities
 except ImportError:
     from services import SearchService, LLMService
     from api.routes import router, initialize_routes
-    from utils import load_config, load_environment, setup_directories
+    from ui.gradio_interface import GradioInterface
+    from common.config_utils import load_config, load_environment, setup_directories
 
 from common.logging_utils import setup_logging  # Logging configuration
 
@@ -155,137 +156,6 @@ def initialize_services(config, api_key, api_base):
         logging.error(f"Failed to initialize services: {e}")
         raise
 
-def build_gradio_interface(search_service, llm_service):
-    """
-    Build an interactive web interface for the RAG chatbot using Gradio.
-    
-    This function creates a user-friendly chat interface with:
-    1. Chat history display
-    2. Input box for questions
-    3. Send button for submission
-    4. Clear button for resetting chat
-    
-    The interface is styled with custom CSS for better user experience:
-    - Larger, more readable font for input
-    - Comfortable padding and spacing
-    - Distinctive button styling
-    - Clear visual hierarchy
-    
-    Args:
-        search_service (SearchService): Service for retrieving relevant context
-        llm_service (LLMService): Service for generating answers
-        
-    Returns:
-        gr.Blocks: Configured Gradio interface ready for launch
-    """
-    
-    def chatbot_interface(message, history):
-        """
-        Core chatbot logic that processes user messages and generates responses.
-        
-        Process Flow:
-        1. Validate user input
-        2. Search for relevant context
-        3. Generate response using LLM
-        4. Format response with references
-        5. Update chat history
-        
-        Args:
-            message (str): User's question or input
-            history (list): List of previous (question, answer) tuples
-            
-        Returns:
-            tuple: (updated_history, display_history)
-                - updated_history: Internal history state
-                - display_history: Formatted history for display
-                
-        Error Handling:
-        - Empty messages are rejected
-        - All exceptions are caught and return user-friendly errors
-        """
-        try:
-            # Validate user input
-            if not message.strip():
-                return history, "Please enter a valid question."
-
-            # Search for relevant context in the knowledge base
-            search_results = search_service.search(message)
-
-            # Combine all relevant text passages into context
-            context = "\n\n".join([text for text, score, metadata in search_results])
-
-            # Generate response using the LLM with retrieved context
-            response, _ = llm_service.generate_response(message, context)
-
-            # Add source references to the response
-            formatted_response = llm_service.format_response_with_references(
-                response, search_results
-            )
-
-            # Update chat history
-            history.append((message, formatted_response))
-            return history, history
-
-        except Exception as e:
-            logging.error(f"Error in chatbot interface: {e}")
-            return history, "An error occurred. Please try again."
-
-    # Build the Gradio interface with custom styling
-    with gr.Blocks(css="""
-        #user-input {
-            padding-top: 2px !important;
-            font-size: 16px !important;
-            line-height: 1.2 !important;
-            background-color: #f9f9f9 !important;
-        }
-        #submit-button {
-            margin-top: 10px !important;
-            background-color: #2196F3 !important;
-            color: white !important;
-        }
-    """) as demo:
-        # Header and description
-        gr.Markdown("### RAG Chatbot")
-        gr.Markdown("Ask any question about the documents in the knowledge base.")
-
-        # Chat history display
-        chatbot = gr.Chatbot(
-            label="Chat History",
-            show_label=True,
-            height=400
-        )
-        
-        # Input area with submit button
-        with gr.Row():
-            msg = gr.Textbox(
-                lines=2,
-                placeholder="Enter your question here...",
-                label="Your Question",
-                elem_id="user-input"
-            )
-            submit_btn = gr.Button("Send", elem_id="submit-button")
-        
-        # Clear history button
-        clear_btn = gr.Button("Clear Chat History")
-        state = gr.State([])  # Internal state for chat history
-
-        # Connect interface components to chatbot logic
-        submit_btn.click(  # Handle button clicks
-            fn=chatbot_interface,
-            inputs=[msg, state],
-            outputs=[chatbot, state]
-        )
-        msg.submit(  # Handle Enter key in textbox
-            fn=chatbot_interface,
-            inputs=[msg, state],
-            outputs=[chatbot, state]
-        )
-        
-        # Clear chat history when requested
-        clear_btn.click(lambda: ([], []), outputs=[chatbot, state])
-
-    return demo
-
 def main():
     """
     Main entry point for the inference pipeline application.
@@ -320,6 +190,14 @@ def main():
         config = load_config(Path("config/config.json"))
         api_key, api_base = load_environment()
         
+        # Log API configuration (without exposing the key)
+        logging.info(f"API Base URL: {api_base}")
+        logging.info("API Key loaded: %s", "Yes" if api_key else "No")
+        if not api_key:
+            raise ValueError("API key not found in environment")
+        if not api_base:
+            raise ValueError("API base URL not found in environment")
+        
         # Setup logging infrastructure with rotation
         logger = setup_logging(
             log_folder=Path(config['directories']['log_folder']),
@@ -350,12 +228,9 @@ def main():
             logging.info("FastAPI interface launched")
 
             # Create and launch Gradio interface
-            demo = build_gradio_interface(search_service, llm_service)
-            demo.launch(
-                server_name="0.0.0.0",
-                server_port=7862,
-                share=False  # Don't expose publicly
-            )
+            gradio_ui = GradioInterface(search_service, llm_service)
+            gradio_ui.launch(server_name="0.0.0.0", server_port=7862, share=False)
+            logging.info("Gradio interface launched")
         else:
             logging.info("CI/CD environment detected. Skipping interface launch.")
 
