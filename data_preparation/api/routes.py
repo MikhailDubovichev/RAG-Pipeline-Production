@@ -45,6 +45,11 @@ class DataPrepService:
     async def upload_file(self, file: UploadFile) -> Dict[str, str]:
         """Handle file upload request."""
         try:
+            # Verify file extension
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext != '.pdf':
+                raise ValueError(f"Unsupported file type: {file_ext}. Only PDF files are supported.")
+                
             file_path = Path(self.config['directories']['to_process_dir']) / file.filename
             
             with open(file_path, "wb") as f:
@@ -53,6 +58,12 @@ class DataPrepService:
             logger.info(f"File {file.filename} uploaded successfully.")
             return {"message": f"File {file.filename} uploaded successfully."}
             
+        except ValueError as ve:
+            logger.error(f"Invalid file type: {str(ve)}")
+            raise HTTPException(
+                status_code=400,
+                detail=str(ve)
+            )
         except Exception as e:
             logger.error(f"Error uploading file: {e}")
             raise HTTPException(
@@ -67,7 +78,7 @@ class DataPrepService:
         This method performs the main document processing workflow:
         1. Loads records of previously processed files
         2. Identifies new files that need processing
-        3. Processes documents by type (PDF, Excel, PowerPoint, Word)
+        3. Processes PDF documents
         4. Updates search indices with new content
         5. Moves processed files to archive
         6. Updates processing records
@@ -79,26 +90,17 @@ class DataPrepService:
             Exception: Any error during processing is logged and re-raised
         """
         try:
-            # Get paths for record keeping
+            # Get path for record keeping
             processed_files_record_pdf = Path(self.config['directories']['processed_dir']) / "processed_files_pdf.json"
-            processed_files_record_excel = Path(self.config['directories']['processed_dir']) / "processed_files_excel.json"
-            processed_files_record_ppt = Path(self.config['directories']['processed_dir']) / "processed_files_ppt.json"
-            processed_files_record_doc = Path(self.config['directories']['processed_dir']) / "processed_files_doc.json"
 
             # Load records of previously processed files
             processed_files_pdf = self.file_service.load_processed_files(processed_files_record_pdf)
-            processed_files_excel = self.file_service.load_processed_files(processed_files_record_excel)
-            processed_files_ppt = self.file_service.load_processed_files(processed_files_record_ppt)
-            processed_files_doc = self.file_service.load_processed_files(processed_files_record_doc)
 
-            # Get all files by type
-            pdf_files, excel_files, ppt_files, doc_files = self.file_service.get_files_by_type()
+            # Get all PDF files
+            pdf_files = self.file_service.get_files_by_type()
 
             # Identify new files
             new_pdf_files = self.file_service.get_new_files(pdf_files, processed_files_pdf)
-            new_excel_files = self.file_service.get_new_files(excel_files, processed_files_excel)
-            new_ppt_files = self.file_service.get_new_files(ppt_files, processed_files_ppt)
-            new_doc_files = self.file_service.get_new_files(doc_files, processed_files_doc)
 
             # Process new documents
             all_new_docs = []
@@ -106,18 +108,6 @@ class DataPrepService:
             if new_pdf_files:
                 pdf_docs = self.doc_processor.load_pdf_docs(new_pdf_files)
                 all_new_docs.extend(pdf_docs)
-                
-            if new_excel_files:
-                excel_docs = self.doc_processor.load_excel_docs(new_excel_files)
-                all_new_docs.extend(excel_docs)
-                
-            if new_ppt_files:
-                ppt_docs = self.doc_processor.load_ppt_docs(new_ppt_files)
-                all_new_docs.extend(ppt_docs)
-                
-            if new_doc_files:
-                doc_docs = self.doc_processor.load_doc_docs(new_doc_files)
-                all_new_docs.extend(doc_docs)
 
             # Update indices if we have new documents
             if all_new_docs:
@@ -132,14 +122,7 @@ class DataPrepService:
 
                 # Move processed files and update records
                 self.file_service.move_to_processed(new_pdf_files)
-                self.file_service.move_to_processed(new_excel_files)
-                self.file_service.move_to_processed(new_ppt_files)
-                self.file_service.move_to_processed(new_doc_files)
-
                 self.file_service.update_processed_files_record(processed_files_record_pdf, new_pdf_files)
-                self.file_service.update_processed_files_record(processed_files_record_excel, new_excel_files)
-                self.file_service.update_processed_files_record(processed_files_record_ppt, new_ppt_files)
-                self.file_service.update_processed_files_record(processed_files_record_doc, new_doc_files)
 
             return len(all_new_docs)
         except Exception as e:
@@ -173,10 +156,7 @@ async def upload_file(file: UploadFile):
     Upload a file for processing.
     
     Accepts:
-    - PDF files
-    - Excel files (.xls, .xlsx)
-    - PowerPoint files (.ppt, .pptx)
-    - Word documents (.doc, .docx)
+    - PDF files only
     """
     if not data_prep_service:
         raise HTTPException(

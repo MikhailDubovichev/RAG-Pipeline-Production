@@ -2,7 +2,7 @@
 Gradio web interface implementation for the data preparation pipeline.
 
 This module provides a user-friendly interface for:
-1. Uploading documents (PDF, Excel, PowerPoint, Word)
+1. Uploading PDF documents
 2. Processing documents into chunks
 3. Creating/updating search indices
 """
@@ -53,8 +53,8 @@ class GradioInterface:
             
             # Verify file extension
             file_ext = Path(file.name).suffix.lower()
-            if file_ext not in ['.pdf', '.xlsx', '.xls', '.pptx', '.ppt', '.docx', '.doc']:
-                error_msg = f"Unsupported file type: {file_ext}. Supported types: PDF, Excel, PowerPoint, Word"
+            if file_ext != '.pdf':
+                error_msg = f"Unsupported file type: {file_ext}. Only PDF files are supported."
                 logging.error(error_msg)
                 return error_msg
             
@@ -119,11 +119,11 @@ class GradioInterface:
             
             # Check for files to process
             to_process_dir = Path(self.config['directories']['to_process_dir'])
-            files = list(to_process_dir.glob("*.*"))
+            files = list(to_process_dir.glob("*.pdf"))
             logging.info(f"Found {len(files)} files in {to_process_dir}")
             
             if not files:
-                return "No files found in the to_process directory."
+                return "No PDF files found in the to_process directory."
             
             # Use DataPrepService to handle document processing
             result = self.data_prep_service.process_documents_with_response()
@@ -146,7 +146,7 @@ class GradioInterface:
             gr.Markdown("# Data Preparation Pipeline")
             
             with gr.Tab("Upload"):
-                file_input = gr.File(label="Upload File")
+                file_input = gr.File(label="Upload PDF File")
                 upload_button = gr.Button("Upload")
                 upload_output = gr.Textbox(label="Upload Status")
                 upload_button.click(

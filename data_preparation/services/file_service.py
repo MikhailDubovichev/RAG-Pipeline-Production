@@ -10,7 +10,7 @@ class FileService:
     """
     A service class that handles all file-related operations in the data preparation pipeline.
     This class is responsible for:
-    1. Finding files of different types (.pdf, .xlsx, etc.) in a source directory
+    1. Finding PDF files in a source directory
     2. Tracking which files have been processed
     3. Moving processed files to a designated directory
     4. Maintaining a record of processed files
@@ -34,58 +34,43 @@ class FileService:
         """
         self.to_process_dir = to_process_dir
         self.processed_dir = processed_dir
-        self.supported_extensions = {".pdf", ".xls", ".xlsx", ".ppt", ".pptx", ".doc", ".docx"}
+        self.supported_extensions = {".pdf"}
 
-    def get_files_by_type(self) -> tuple[List[Path], List[Path], List[Path], List[Path]]:
+    def get_files_by_type(self) -> List[Path]:
         """
-        Scans the to_process directory and categorizes files by their types.
+        Scans the to_process directory and finds all PDF files.
         
         Process:
         1. Checks if the source directory exists
-        2. Recursively finds all files with supported extensions (using rglob - recursive global pattern matching)
-        3. Categorizes files into separate lists based on their extensions
+        2. Recursively finds all PDF files (using rglob - recursive global pattern matching)
         
         Returns:
-            A tuple containing four lists of Path objects:
-            1. PDF files (*.pdf)
-            2. Excel files (*.xls, *.xlsx)
-            3. PowerPoint files (*.ppt, *.pptx)
-            4. Word documents (*.doc, *.docx)
+            List[Path]: List of paths to PDF files
             
-        If any error occurs or the directory doesn't exist, returns empty lists.
+        If any error occurs or the directory doesn't exist, returns empty list.
         """
         try:
             # Log the start of file discovery
-            logger.info(f"Scanning directory {self.to_process_dir} for files")
+            logger.info(f"Scanning directory {self.to_process_dir} for PDF files")
             
             # Ensure the directory exists
             if not self.to_process_dir.exists():
                 logger.error(f"Directory not found: {self.to_process_dir}")
-                return [], [], [], []
+                return []
                 
-            # Get all files with supported extensions
-            all_files = [f for f in self.to_process_dir.rglob("*") 
-                        if f.is_file() and f.suffix.lower() in self.supported_extensions]
+            # Get all PDF files
+            pdf_files = [f for f in self.to_process_dir.rglob("*") 
+                        if f.is_file() and f.suffix.lower() == ".pdf"]
             
             # Log the total number of files found
-            logger.info(f"Found {len(all_files)} files with supported extensions")
+            logger.info(f"Found {len(pdf_files)} PDF files")
 
-            # Categorize files by type
-            pdf_files = [f for f in all_files if f.suffix.lower() == ".pdf"]
-            excel_files = [f for f in all_files if f.suffix.lower() in {".xls", ".xlsx"}]
-            ppt_files = [f for f in all_files if f.suffix.lower() in {".ppt", ".pptx"}]
-            doc_files = [f for f in all_files if f.suffix.lower() in {".doc", ".docx"}]
-            
-            # Log the breakdown by file type
-            logger.info(f"File breakdown: {len(pdf_files)} PDFs, {len(excel_files)} Excel files, "
-                       f"{len(ppt_files)} PowerPoint files, {len(doc_files)} Word documents")
-
-            return pdf_files, excel_files, ppt_files, doc_files
+            return pdf_files
             
         except Exception as e:
             logger.error(f"Error scanning directory {self.to_process_dir}: {str(e)}")
             logger.exception("Detailed error information:")
-            return [], [], [], []
+            return []
 
     def load_processed_files(self, record_path: Path) -> Set[str]:
         """
