@@ -142,21 +142,23 @@ class LLMService:
         2. PDF metadata details
         3. Text previews
         4. Structured formatting
+        5. Similarity scores for relevance analysis
         
         Args:
             response (str): Raw LLM-generated response
             search_results (List[Tuple[str, float, Dict]]): Search results containing:
                 - str: Document text content
-                - float: Relevance score
+                - float: Relevance score (dot product/similarity score)
                 - Dict: Document metadata
                 
         Returns:
-            str: Formatted response with references
+            str: Formatted response with references including similarity scores
                 
         Note:
             - Handles missing metadata gracefully
             - Truncates long text previews
             - Maintains readable formatting
+            - Includes similarity scores for threshold tuning
         """
         # Return as is if no relevant information
         if response.lower() == 'no relevant information available.':
@@ -184,22 +186,14 @@ class LLMService:
                 # Use metadata page number if available
                 source_info.append(f"Page: {metadata.get('page_number')}")
             
-            # Add section if available - prioritize metadata over content extraction
-            if metadata.get('section'):
-                # Use section from metadata (extracted during document processing)
-                section = metadata.get('section')
-                # Don't use document title as section
-                if metadata.get('document_title') != section:
-                    source_info.append(f"Section: {section}")
-            elif len(lines) > 0 and content_start > 0:
-                # Fallback to first line as section if not already used as document title
-                potential_section = lines[0].strip()
-                if metadata.get('document_title') != potential_section:
-                    source_info.append(f"Section: {potential_section}")
+            # Add section if available
+            if len(lines) > 0 and content_start > 0:
+                source_info.append(f"Section: {lines[0].strip()}")
+            elif metadata.get('section'):
+                source_info.append(f"Section: {metadata.get('section')}")
             
-            # Add document title if available and different from section
-            if metadata.get('document_title'):
-                source_info.append(f"Title: {metadata.get('document_title')}")
+            # Add similarity score (rounded to 4 decimal places for readability)
+            source_info.append(f"Relevance: {score:.4f}")
             
             # Add content preview
             content_text = '\n'.join(lines[content_start:]) if content_start > 0 else text

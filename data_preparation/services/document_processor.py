@@ -149,13 +149,13 @@ class DocumentProcessor:
                     
                 # Assign document IDs and metadata
                 try:
-                    docs = self._assign_doc_ids(docs)
-                    for doc in docs:
-                        doc = self._extract_metadata(doc, source_file=pdf_path.name)
-                        
-                    # Add to the collection
-                    all_docs.extend(docs)
-                    logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
+                docs = self._assign_doc_ids(docs)
+                for doc in docs:
+                    doc = self._extract_metadata(doc, source_file=pdf_path.name)
+                    
+                # Add to the collection
+                all_docs.extend(docs)
+                logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
                 except Exception as e:
                     error_msg = f"Error assigning metadata to documents: {e}"
                     logger.error(error_msg)
@@ -256,82 +256,4 @@ class DocumentProcessor:
             it for convenience in method chaining.
         """
         doc.metadata["source"] = source_file
-        
-        # Extract section information from the content if possible
-        DocumentProcessor._extract_section_info(doc)
-        
-        return doc
-        
-    @staticmethod
-    def _extract_section_info(doc: Document) -> None:
-        """
-        Extract section information from document content.
-        
-        This method analyzes the document content to identify section headings
-        and distinguishes them from document titles. It adds this information
-        to the document's metadata.
-        
-        The method:
-        1. Examines the first few lines of text
-        2. Identifies potential section headings based on formatting patterns
-        3. Distinguishes between document titles and actual section headings
-        4. Adds the section information to document metadata
-        
-        Args:
-            doc (Document): Document to extract section information from
-            
-        Note:
-            This method modifies the document in place by adding section
-            information to its metadata.
-        """
-        if not doc.text:
-            return
-            
-        lines = doc.text.split('\n')
-        if not lines:
-            return
-            
-        # Skip empty lines at the beginning
-        start_idx = 0
-        while start_idx < len(lines) and not lines[start_idx].strip():
-            start_idx += 1
-            
-        if start_idx >= len(lines):
-            return
-            
-        # First non-empty line is often the document title or section heading
-        first_line = lines[start_idx].strip()
-        
-        # Check if this is likely a document title rather than a section
-        is_likely_doc_title = False
-        
-        # Document titles are often short and may be followed by metadata like dates
-        if len(first_line) < 30 and len(lines) > start_idx + 1:
-            # If next line is a page number, this is likely a header/title pattern
-            if lines[start_idx + 1].strip().isdigit():
-                is_likely_doc_title = True
-                
-            # If there's a blank line after the title followed by actual content
-            elif (start_idx + 2 < len(lines) and 
-                  not lines[start_idx + 1].strip() and 
-                  lines[start_idx + 2].strip()):
-                is_likely_doc_title = True
-        
-        # If we believe this is a document title, look for actual section headings
-        if is_likely_doc_title:
-            # Store the document title
-            doc.metadata["document_title"] = first_line
-            
-            # Look for actual section headings in the content
-            for i in range(start_idx + 2, min(start_idx + 10, len(lines))):
-                line = lines[i].strip()
-                if line and len(line) < 50:
-                    # Potential section heading - look for patterns
-                    if (line.isupper() or  # ALL CAPS
-                        line.endswith(':') or  # Ends with colon
-                        (i+1 < len(lines) and not lines[i+1].strip())):  # Followed by blank line
-                        doc.metadata["section"] = line
-                        return
-        else:
-            # If not a document title, treat as section
-            doc.metadata["section"] = first_line 
+        return doc 
