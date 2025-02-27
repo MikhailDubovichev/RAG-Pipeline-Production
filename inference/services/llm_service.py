@@ -143,38 +143,18 @@ class LLMService:
         3. Text previews
         4. Structured formatting
         
-        The formatting includes:
-        - Source PDF filenames
-        - Location details (page number)
-        - Content previews
-        - Clean, readable layout
-        
         Args:
             response (str): Raw LLM-generated response
             search_results (List[Tuple[str, float, Dict]]): Search results containing:
                 - str: Document text content
                 - float: Relevance score
-                - Dict: Document metadata including:
-                    - source: PDF filename
-                    - section: Document section
-                    - page_number: PDF page
-                    - chunk_number: Position in document
-                    - total_chunks_in_section: Total chunks
+                - Dict: Document metadata
                 
         Returns:
-            str: Formatted response with references in the format:
-                <response text>
-                
-                Sources:
-                
-                - Document: document.pdf
-                  Page: 5
-                  Created: September 2024
-                  Content: "Text preview..."
+            str: Formatted response with references
                 
         Note:
             - Handles missing metadata gracefully
-            - Extracts page numbers and dates from content when not in metadata
             - Truncates long text previews
             - Maintains readable formatting
         """
@@ -185,65 +165,51 @@ class LLMService:
         # Build reference list
         references = []
         for text, score, metadata in search_results:
-            if metadata:
-                # Format source information in a more readable way
-                source_info = []
-                
-                # Document name
-                source_info.append(f"Document: {metadata.get('source', 'Unknown Source')}")
-                
-                # Extract information from text if it's in a common format
-                # This handles cases where metadata is embedded in the text content
-                page_number = None
-                creation_date = None
-                actual_content = text
-                
-                # Try to extract page number and date from text content
-                lines = text.split('\n')
-                if len(lines) >= 3:
-                    # Check if second line might be a page number
-                    if len(lines) > 1 and lines[1].strip().isdigit():
-                        page_number = lines[1].strip()
-                        
-                    # Check if third line might be a date
-                    if len(lines) > 2 and "20" in lines[2]:  # Simple check for year
-                        creation_date = lines[2].strip()
-                    
-                    # Remove metadata lines from content if we extracted them
-                    if page_number or creation_date:
-                        # Skip the first few lines that contain metadata
-                        metadata_lines = 3  # Usually section name, page number, date
-                        actual_content = '\n'.join(lines[metadata_lines:])
-                
-                # Page number with proper formatting
-                if metadata.get('page_number'):
-                    source_info.append(f"Page: {metadata.get('page_number')}")
-                elif page_number:
-                    source_info.append(f"Page: {page_number}")
-                
-                # Section information if available
-                if metadata.get('section'):
-                    source_info.append(f"Section: {metadata.get('section')}")
-                elif len(lines) > 0:
-                    # First line might be section
-                    source_info.append(f"Section: {lines[0].strip()}")
-                
-                # Creation date if available
-                if metadata.get('creation_date'):
-                    source_info.append(f"Created: {metadata.get('creation_date')}")
-                elif creation_date:
-                    source_info.append(f"Created: {creation_date}")
-                
-                # Add text preview with truncation
-                text_preview = actual_content.strip()
-                if len(text_preview) > 150:
-                    text_preview = text_preview[:150] + "..."
-                source_info.append(f"Content: \"{text_preview}\"")
-                
-                # Join all parts with newlines and proper indentation
-                references.append("\n  ".join(source_info))
-            else:
-                references.append(f"Unknown Source:\n  Content: \"{text[:150]}...\"")
+            # Format source information in a more readable way
+            source_info = []
+            
+            # Document name
+            source_info.append(f"Document: {metadata.get('source', 'Unknown Source')}")
+            
+            # Extract page number from the first few lines if it's a number on its own line
+            lines = text.split('\n')
+            content_start = 0
+            
+            # Try to identify the structure of the content
+            if len(lines) >= 2 and lines[1].strip().isdigit():
+                # Add page number
+                source_info.append(f"Page: {lines[1].strip()}")
+                content_start = 3  # Skip section name, page number, and date
+            elif metadata.get('page_number'):
+                # Use metadata page number if available
+                source_info.append(f"Page: {metadata.get('page_number')}")
+            
+            # Add section if available - prioritize metadata over content extraction
+            if metadata.get('section'):
+                # Use section from metadata (extracted during document processing)
+                section = metadata.get('section')
+                # Don't use document title as section
+                if metadata.get('document_title') != section:
+                    source_info.append(f"Section: {section}")
+            elif len(lines) > 0 and content_start > 0:
+                # Fallback to first line as section if not already used as document title
+                potential_section = lines[0].strip()
+                if metadata.get('document_title') != potential_section:
+                    source_info.append(f"Section: {potential_section}")
+            
+            # Add document title if available and different from section
+            if metadata.get('document_title'):
+                source_info.append(f"Title: {metadata.get('document_title')}")
+            
+            # Add content preview
+            content_text = '\n'.join(lines[content_start:]) if content_start > 0 else text
+            content_text = content_text.strip()
+            if len(content_text) > 150:
+                content_text = content_text[:150] + "..."
+            source_info.append(f"Content: \"{content_text}\"")
+            
+            # Join all parts with newlines and proper indentation
+            references.append("\n  ".join(source_info))
 
         # Format final response with references
         references_text = "\n\n- ".join(references)

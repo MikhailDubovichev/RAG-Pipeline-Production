@@ -22,6 +22,9 @@ import logging  # Python's built-in logging facility
 from pathlib import Path  # Object-oriented filesystem paths
 import os  # Operating system interface
 import threading  # Thread-based parallelism
+import subprocess  # For running system commands
+import sys  # For system-specific parameters and functions
+import time  # For time-related functions
 
 # External dependencies
 import httpx  # Modern HTTP client with timeout support
@@ -156,6 +159,85 @@ def initialize_services(config, api_key, api_base):
         logging.error(f"Failed to initialize services: {e}")
         raise
 
+def check_and_kill_process_on_port(port):
+    """
+    Check if a process is using the specified port and kill it if found.
+    
+    Args:
+        port (int): The port number to check
+        
+    Returns:
+        bool: True if a process was killed, False otherwise
+    """
+    try:
+        # Different commands for different operating systems
+        if sys.platform.startswith('win'):
+            # Windows command to find process using the port
+            result = subprocess.run(
+                f'netstat -ano | findstr :{port}',
+                shell=True, 
+                capture_output=True, 
+                text=True
+            )
+            
+            if result.stdout:
+                # Extract PID from the output
+                for line in result.stdout.strip().split('\n'):
+                    if f':{port}' in line and ('LISTENING' in line or 'ESTABLISHED' in line):
+                        parts = line.strip().split()
+                        if len(parts) > 4:
+                            pid = parts[-1]
+                            logging.info(f"Found process with PID {pid} using port {port}")
+                            
+                            # Kill the process
+                            kill_result = subprocess.run(
+                                f'taskkill /F /PID {pid}',
+                                shell=True,
+                                capture_output=True,
+                                text=True
+                            )
+                            
+                            if kill_result.returncode == 0:
+                                logging.info(f"Successfully terminated process with PID {pid}")
+                                # Wait a moment for the port to be released
+                                time.sleep(1)
+                                return True
+                            else:
+                                logging.warning(f"Failed to terminate process: {kill_result.stderr}")
+        else:
+            # Linux/Mac command to find and kill process
+            result = subprocess.run(
+                f"lsof -i :{port} -t", 
+                shell=True, 
+                capture_output=True, 
+                text=True
+            )
+            
+            if result.stdout:
+                pid = result.stdout.strip()
+                logging.info(f"Found process with PID {pid} using port {port}")
+                
+                # Kill the process
+                kill_result = subprocess.run(
+                    f"kill -9 {pid}",
+                    shell=True,
+                    capture_output=True,
+                    text=True
+                )
+                
+                if kill_result.returncode == 0:
+                    logging.info(f"Successfully terminated process with PID {pid}")
+                    # Wait a moment for the port to be released
+                    time.sleep(1)
+                    return True
+                else:
+                    logging.warning(f"Failed to terminate process: {kill_result.stderr}")
+                    
+        return False
+    except Exception as e:
+        logging.error(f"Error checking/killing process on port {port}: {e}")
+        return False
+
 def main():
     """
     Main entry point for the inference pipeline application.
@@ -220,17 +302,59 @@ def main():
 
         # Check if we're in a CI environment
         if os.getenv("CI") is None:
-            # Launch FastAPI in a separate thread to not block
-            uvicorn_thread = threading.Thread(
-                target=lambda: uvicorn.run(app, host="0.0.0.0", port=8082)
-            )
-            uvicorn_thread.start()
-            logging.info("FastAPI interface launched")
+            # Preferred ports
+            preferred_fastapi_port = 8082
+            preferred_gradio_port = 7862
+            
+            # Try to kill any existing processes on our preferred ports
+            check_and_kill_process_on_port(preferred_fastapi_port)
+            check_and_kill_process_on_port(preferred_gradio_port)
+            
+            # Launch FastAPI with port retry
+            fastapi_port = None
+            for port in range(preferred_fastapi_port, preferred_fastapi_port + 10):
+                try:
+                    # Create the server without starting it
+                    uvicorn_config = uvicorn.Config(app, host="0.0.0.0", port=port)
+                    server = uvicorn.Server(uvicorn_config)
+                    
+                    # Start the server in a thread
+                    uvicorn_thread = threading.Thread(
+                        target=server.run
+                    )
+                    uvicorn_thread.daemon = True  # Make thread daemon so it exits when main thread exits
+                    uvicorn_thread.start()
+                    
+                    fastapi_port = port
+                    logging.info(f"FastAPI interface launched on port {port}")
+                    break
+                except Exception as e:
+                    logging.warning(f"Port {port} is in use, trying next port")
+                    if port == preferred_fastapi_port + 9:  # Last attempt
+                        raise Exception(f"Could not find available port for FastAPI: {e}")
+                    continue
 
-            # Create and launch Gradio interface
+            # Launch Gradio interface with port retry
             gradio_ui = GradioInterface(search_service, llm_service)
-            gradio_ui.launch(server_name="0.0.0.0", server_port=7862, share=False)
-            logging.info("Gradio interface launched")
+            gradio_port = None
+            
+            for port in range(preferred_gradio_port, preferred_gradio_port + 10):
+                try:
+                    gradio_ui.launch(
+                        server_name="0.0.0.0",
+                        server_port=port,
+                        share=False
+                    )
+                    gradio_port = port
+                    logging.info(f"Gradio interface launched on port {port}")
+                    break
+                except Exception as e:
+                    logging.warning(f"Port {port} is in use, trying next port")
+                    if port == preferred_gradio_port + 9:  # Last attempt
+                        raise Exception(f"Could not find available port for Gradio: {e}")
+                    continue
+                    
+            logging.info(f"Services running - FastAPI on port {fastapi_port}, Gradio on port {gradio_port}")
         else:
             logging.info("CI/CD environment detected. Skipping interface launch.")
 
