@@ -69,7 +69,7 @@ class DocumentProcessor:
         self.overlap_tokens = overlap_tokens
         self.pdf_reader = PDFReader()
 
-    def load_pdf_docs(self, pdf_paths: List[Path]) -> List[Document]:
+    def load_pdf_docs(self, pdf_paths: List[Path]) -> tuple[List[Document], List[tuple[Path, str]]]:
         """
         Load and process PDF documents into searchable chunks.
         
@@ -88,7 +88,9 @@ class DocumentProcessor:
             pdf_paths (List[Path]): List of paths to PDF files to process
             
         Returns:
-            List[Document]: List of processed Document objects, one per page
+            tuple: (List[Document], List[tuple[Path, str]]) - Successful and failed documents
+                - First element is a list of processed Document objects, one per page
+                - Second element is a list of tuples containing (file_path, error_message) for failed files
             
         Error Handling:
         - Skips files that don't exist or aren't readable
@@ -97,6 +99,13 @@ class DocumentProcessor:
         - Ensures cleanup of file handles
         """
         all_docs = []
+        failed_files = []
+        
+        if not pdf_paths:
+            logger.info("No PDF files to process")
+            return all_docs, failed_files
+        
+        # Process files one at a time to manage memory usage
         for pdf_path in pdf_paths:
             try:
                 # Log the start of processing for this PDF
@@ -104,41 +113,92 @@ class DocumentProcessor:
                 
                 # Check if file exists and is readable
                 if not pdf_path.exists():
-                    logger.error(f"PDF file not found: {pdf_path}")
+                    error_msg = f"PDF file not found: {pdf_path}"
+                    logger.error(error_msg)
+                    failed_files.append((pdf_path, error_msg))
                     continue
                     
                 if not os.access(pdf_path, os.R_OK):
-                    logger.error(f"PDF file not readable: {pdf_path}")
+                    error_msg = f"PDF file not readable: {pdf_path}"
+                    logger.error(error_msg)
+                    failed_files.append((pdf_path, error_msg))
                     continue
+                
+                # Check file size to prevent memory issues with very large files
+                file_size_mb = pdf_path.stat().st_size / (1024 * 1024)  # Convert to MB
+                if file_size_mb > 100:  # 100MB threshold
+                    logger.warning(f"Large PDF detected: {pdf_path.name} ({file_size_mb:.2f} MB). This may require significant memory.")
                 
                 # Load and process the PDF
                 docs = []
                 try:
-                    docs = self.pdf_reader.load_data(str(pdf_path))
-                finally:
-                    # Ensure any file handles are closed
-                    import gc
-                    gc.collect()
+                    # Use a separate function call to isolate memory usage
+                    docs = self._load_single_pdf(pdf_path)
+                except Exception as e:
+                    error_msg = f"Error extracting text from PDF: {e}"
+                    logger.error(error_msg)
+                    logger.exception("Detailed error information:")
+                    failed_files.append((pdf_path, error_msg))
+                    continue
                 
                 if not docs:
-                    logger.warning(f"No content extracted from PDF: {pdf_path.name}")
+                    error_msg = f"No content extracted from PDF: {pdf_path.name}"
+                    logger.warning(error_msg)
+                    failed_files.append((pdf_path, error_msg))
                     continue
                     
                 # Assign document IDs and metadata
-                docs = self._assign_doc_ids(docs)
-                for doc in docs:
-                    doc = self._extract_metadata(doc, source_file=pdf_path.name)
-                    
-                # Add to the collection
-                all_docs.extend(docs)
-                logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
+                try:
+                    docs = self._assign_doc_ids(docs)
+                    for doc in docs:
+                        doc = self._extract_metadata(doc, source_file=pdf_path.name)
+                        
+                    # Add to the collection
+                    all_docs.extend(docs)
+                    logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
+                except Exception as e:
+                    error_msg = f"Error assigning metadata to documents: {e}"
+                    logger.error(error_msg)
+                    logger.exception("Detailed error information:")
+                    failed_files.append((pdf_path, error_msg))
                 
             except Exception as e:
-                logger.error(f"Failed to process PDF {pdf_path.name}: {str(e)}")
+                error_msg = f"Failed to process PDF {pdf_path.name}: {str(e)}"
+                logger.error(error_msg)
                 logger.exception("Detailed error information:")
+                failed_files.append((pdf_path, error_msg))
+            
+            # Force garbage collection after each file to free memory
+            import gc
+            gc.collect()
                 
         logger.info(f"Completed processing {len(pdf_paths)} PDF files, extracted {len(all_docs)} total pages")
-        return all_docs
+        logger.info(f"Successfully processed {len(pdf_paths) - len(failed_files)} files, failed to process {len(failed_files)} files")
+        return all_docs, failed_files
+        
+    def _load_single_pdf(self, pdf_path: Path) -> List[Document]:
+        """
+        Load a single PDF file and extract its content.
+        
+        This helper method isolates the memory-intensive PDF loading operation
+        to better manage resources and enable garbage collection between files.
+        
+        Args:
+            pdf_path (Path): Path to the PDF file
+            
+        Returns:
+            List[Document]: List of document objects, one per page
+            
+        Raises:
+            Exception: If PDF loading fails
+        """
+        try:
+            docs = self.pdf_reader.load_data(str(pdf_path))
+            return docs
+        finally:
+            # Ensure any file handles are closed
+            import gc
+            gc.collect()
 
     @staticmethod
     def _assign_doc_ids(documents: List[Document]) -> List[Document]:

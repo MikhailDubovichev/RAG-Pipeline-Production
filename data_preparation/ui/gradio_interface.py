@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 from datetime import datetime
 from ..api.routes import DataPrepService
+import os
 
 class GradioInterface:
     def __init__(self, doc_processor, indexing_service, file_service, config):
@@ -63,7 +64,16 @@ class GradioInterface:
             logging.info(f"Target directory: {to_process_dir}")
             
             # Create directory if needed
-            to_process_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                to_process_dir.mkdir(parents=True, exist_ok=True)
+            except PermissionError as e:
+                error_msg = f"Permission denied when creating directory: {e}"
+                logging.error(error_msg)
+                return error_msg
+            except OSError as e:
+                error_msg = f"OS error when creating directory: {e}"
+                logging.error(error_msg)
+                return error_msg
             
             # Handle duplicate filenames
             target_path = to_process_dir / Path(file.name).name
@@ -74,28 +84,58 @@ class GradioInterface:
 
             # Copy file with metadata preservation
             try:
-                shutil.copy2(file.name, target_path)
+                # Check if source file exists and is readable
+                source_path = Path(file.name)
+                if not source_path.exists():
+                    error_msg = f"Source file not found: {source_path}"
+                    logging.error(error_msg)
+                    return error_msg
+                
+                if not os.access(source_path, os.R_OK):
+                    error_msg = f"Source file not readable: {source_path}"
+                    logging.error(error_msg)
+                    return error_msg
+                
+                # Use proper context manager for file operations
+                with open(source_path, 'rb') as src_file:
+                    with open(target_path, 'wb') as dst_file:
+                        dst_file.write(src_file.read())
                 logging.info(f"File copied from {file.name} to {target_path}")
+            except PermissionError as e:
+                error_msg = f"Permission denied when copying file: {e}"
+                logging.error(error_msg)
+                return error_msg
+            except IOError as e:
+                error_msg = f"IO error when copying file: {e}"
+                logging.error(error_msg)
+                return error_msg
             except Exception as e:
                 error_msg = f"Error copying file: {str(e)}"
                 logging.error(error_msg)
+                logging.exception("Detailed error information:")
                 return error_msg
                 
             # Verify file was copied successfully
             if target_path.exists():
-                file_size = target_path.stat().st_size
-                if file_size == 0:
-                    error_msg = f"Error: File {target_path.name} is empty"
+                try:
+                    file_size = target_path.stat().st_size
+                    if file_size == 0:
+                        error_msg = f"Error: File {target_path.name} is empty"
+                        logging.error(error_msg)
+                        # Clean up empty file
+                        target_path.unlink()
+                        return error_msg
+                        
+                    success_msg = (
+                        f"File {target_path.name} uploaded successfully (size: {file_size:,} bytes).\n"
+                        "Open 'Process' tab and click 'Process Documents' to process the file."
+                    )
+                    logging.info(f"File {target_path.name} uploaded successfully (size: {file_size} bytes)")
+                    return success_msg
+                except OSError as e:
+                    error_msg = f"Error accessing file stats: {e}"
                     logging.error(error_msg)
-                    target_path.unlink()
                     return error_msg
-                    
-                success_msg = (
-                    f"File {target_path.name} uploaded successfully (size: {file_size:,} bytes).\n"
-                    "Click 'Process Documents' to process the file."
-                )
-                logging.info(f"File {target_path.name} uploaded successfully (size: {file_size} bytes)")
-                return success_msg
             else:
                 error_msg = f"File copy failed: {file.name} not found at target location"
                 logging.error(error_msg)
@@ -119,6 +159,13 @@ class GradioInterface:
             
             # Check for files to process
             to_process_dir = Path(self.config['directories']['to_process_dir'])
+            
+            # Ensure directory exists
+            if not to_process_dir.exists():
+                to_process_dir.mkdir(parents=True, exist_ok=True)
+                logging.info(f"Created to_process directory: {to_process_dir}")
+            
+            # Find PDF files
             files = list(to_process_dir.glob("*.pdf"))
             logging.info(f"Found {len(files)} files in {to_process_dir}")
             
@@ -127,12 +174,21 @@ class GradioInterface:
             
             # Use DataPrepService to handle document processing
             result = self.data_prep_service.process_documents_with_response()
+            
+            # Force garbage collection after processing
+            import gc
+            gc.collect()
+            
             return result["message"]
             
         except Exception as e:
             error_msg = f"Processing failed: {str(e)}"
             logging.error(error_msg)
-            logging.exception("Detailed error information:")
+            
+            # Ensure cleanup even on error
+            import gc
+            gc.collect()
+            
             return error_msg
 
     def build_interface(self):

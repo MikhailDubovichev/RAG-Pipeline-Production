@@ -8,14 +8,14 @@ This module creates and maintains two types of search indices:
 Key Features:
 1. Dual index maintenance (Whoosh + FAISS)
 2. Automatic dimension detection for embeddings
-3. Rich metadata preservation
+3. Rich metadata preservation for PDF documents
 4. Incremental index updates
 5. Error handling and logging
 
 The service handles:
 - Index creation and initialization
-- Document addition and updates
-- Metadata field management
+- PDF document addition and updates
+- Metadata field management (page numbers, sections)
 - Index persistence
 - Embedding generation
 
@@ -60,13 +60,13 @@ logger = logging.getLogger(__name__)
 
 class IndexingService:
     """
-    Service for creating and maintaining search indices.
+    Service for creating and maintaining search indices for PDF documents.
     
     This service manages two types of indices:
     1. Whoosh Index:
        - Full-text search capability
+       - PDF metadata indexing (page numbers, sections)
        - Field-specific queries
-       - Metadata filtering
        - Sorted results
        
     2. FAISS Index:
@@ -76,7 +76,7 @@ class IndexingService:
        - Scalable to millions of documents
        
     The service ensures:
-    - Consistent document processing
+    - Consistent PDF document processing
     - Safe concurrent access
     - Proper persistence
     - Error recovery
@@ -129,7 +129,7 @@ class IndexingService:
         sample_embedding = self.embedding_model.get_text_embedding(sample_text)
         return len(sample_embedding)
 
-    def create_or_update_whoosh_index(self, documents: List[Document], index_dir: Path) -> None:
+    def create_or_update_whoosh_index(self, documents: List[Document], index_dir: Path) -> tuple[bool, str, List[str]]:
         """
         Create or update the Whoosh index for keyword search.
         
@@ -142,9 +142,6 @@ class IndexingService:
         Schema Fields:
         - content: Full text content (searchable)
         - source: Document source/filename
-        - sheet: Excel sheet name
-        - row_number: Row number in spreadsheets
-        - slide_number: Slide number in presentations
         - section: Document section/heading
         - chunk_number: Position in chunked document
         - total_chunks_in_section: Total chunks in section
@@ -155,8 +152,11 @@ class IndexingService:
             documents (List[Document]): Documents to index
             index_dir (Path): Directory for index storage
             
-        Raises:
-            Exception: If index creation/update fails
+        Returns:
+            tuple: (bool, str, List[str]) - Success status, error message, and failed document IDs
+                - First element is True if indexing was successful, False otherwise
+                - Second element is an error message if indexing failed, empty string otherwise
+                - Third element is a list of document IDs that failed to be indexed
             
         Note:
             - Creates directory if it doesn't exist
@@ -168,9 +168,6 @@ class IndexingService:
         schema = Schema(
             content=TEXT(stored=True),  # Main searchable content
             source=ID(stored=True),  # Source filename
-            sheet=ID(stored=True),  # Excel sheet name
-            row_number=NUMERIC(stored=True, sortable=True),  # Row in spreadsheet
-            slide_number=NUMERIC(stored=True, sortable=True),  # Slide in presentation
             section=TEXT(stored=True),  # Document section
             chunk_number=NUMERIC(stored=True, sortable=True),  # Chunk sequence
             total_chunks_in_section=NUMERIC(stored=True, sortable=True),  # Total chunks
@@ -178,20 +175,44 @@ class IndexingService:
             doc_id=ID(stored=True, unique=True),  # Unique identifier
         )
 
+        failed_docs = []
+        
         try:
             # Ensure index directory exists
-            os.makedirs(index_dir, exist_ok=True)
+            try:
+                os.makedirs(index_dir, exist_ok=True)
+                logger.info(f"Ensured index directory exists: {index_dir}")
+            except PermissionError as e:
+                error_msg = f"Permission denied when creating index directory: {e}"
+                logger.error(error_msg)
+                return False, error_msg, []
+            except OSError as e:
+                error_msg = f"OS error when creating index directory: {e}"
+                logger.error(error_msg)
+                return False, error_msg, []
 
             # Create new index or open existing
-            if not exists_in(index_dir):
-                idx = create_in(index_dir, schema)
-                logger.info(f"Created new Whoosh index at {index_dir}")
-            else:
-                idx = open_dir(index_dir)
-                logger.info(f"Opened existing Whoosh index at {index_dir}")
+            try:
+                if not exists_in(index_dir):
+                    idx = create_in(index_dir, schema)
+                    logger.info(f"Created new Whoosh index at {index_dir}")
+                else:
+                    idx = open_dir(index_dir)
+                    logger.info(f"Opened existing Whoosh index at {index_dir}")
+            except Exception as e:
+                error_msg = f"Failed to create/open Whoosh index: {e}"
+                logger.error(error_msg)
+                logger.exception("Detailed error information:")
+                return False, error_msg, []
 
             # Get index writer for updates
-            writer = idx.writer()
+            try:
+                writer = idx.writer()
+            except Exception as e:
+                error_msg = f"Failed to get index writer: {e}"
+                logger.error(error_msg)
+                logger.exception("Detailed error information:")
+                return False, error_msg, []
 
             # Process each document
             for doc in documents:
@@ -204,32 +225,49 @@ class IndexingService:
                     }
 
                     # Add optional metadata fields if present
-                    for field in ["sheet", "row_number", "slide_number", "section",
-                                "chunk_number", "total_chunks_in_section", "page_number"]:
+                    for field in ["section", "chunk_number", "total_chunks_in_section", "page_number"]:
                         if field in doc.metadata:
                             doc_fields[field] = doc.metadata[field]
 
                     # Update document in index
                     writer.update_document(**doc_fields)
                 except Exception as e:
-                    logger.error(f"Failed to index document {doc.metadata.get('doc_id', '')}: {e}")
+                    doc_id = doc.metadata.get('doc_id', 'unknown')
+                    error_msg = f"Failed to index document {doc_id}: {e}"
+                    logger.error(error_msg)
+                    failed_docs.append(doc_id)
 
             # Commit changes to index
-            writer.commit()
-            logger.info("Whoosh index updated successfully")
+            try:
+                writer.commit()
+                logger.info("Whoosh index updated successfully")
+            except Exception as e:
+                error_msg = f"Failed to commit changes to Whoosh index: {e}"
+                logger.error(error_msg)
+                logger.exception("Detailed error information:")
+                return False, error_msg, failed_docs
+
+            if failed_docs:
+                return True, f"Indexed successfully with {len(failed_docs)} document failures", failed_docs
+            else:
+                return True, "", []
 
         except Exception as e:
-            logger.error(f"Failed to create/update Whoosh index: {e}")
-            raise
+            error_msg = f"Failed to create/update Whoosh index: {e}"
+            logger.error(error_msg)
+            logger.exception("Detailed error information:")
+            return False, error_msg, failed_docs
 
-    def create_or_update_faiss_index(self, documents: List[Document], index_path: Path) -> None:
+    def create_or_update_faiss_index(self, documents: List[Document], index_path: Path) -> tuple[bool, str]:
         """
         Create or update the FAISS index for semantic search.
         
-        This method will:
-        1. Try to load and update existing index if present
-        2. Create new index only if none exists
-        3. Store index only in .faiss format to avoid duplication
+        Args:
+            documents (List[Document]): Documents to index
+            index_path (Path): Directory for index storage
+            
+        Returns:
+            tuple: (bool, str) - Success status and error message if any
         """
         try:
             faiss_file = "default__vector_store.faiss"
@@ -237,7 +275,9 @@ class IndexingService:
             
             # Create directory if it doesn't exist
             index_path.mkdir(parents=True, exist_ok=True)
-            logging.info(f"Ensured index directory exists: {index_path}")
+            
+            # Process documents in batches to manage memory
+            batch_size = 100  # Adjust based on document size and available memory
             
             # Check for existing index
             if (index_path / faiss_file).exists():
@@ -253,23 +293,26 @@ class IndexingService:
                         index_store=SimpleIndexStore(),
                         persist_dir=str(index_path)
                     )
-                    logging.info("Successfully loaded existing index")
                     
-                    # Update with new documents
-                    logging.info(f"Updating existing index with {len(documents)} new documents")
-                    index = VectorStoreIndex.from_documents(
-                        documents,
-                        storage_context=storage_context,
-                        embedding=self.embedding_model,
-                        show_progress=True
-                    )
-                    logging.info("Successfully updated existing index")
-                except Exception as load_error:
-                    logging.error(f"Failed to load existing index: {str(load_error)}")
-                    raise
+                    # Process documents in batches
+                    for i in range(0, len(documents), batch_size):
+                        batch = documents[i:i + batch_size]
+                        index = VectorStoreIndex.from_documents(
+                            batch,
+                            storage_context=storage_context,
+                            embedding=self.embedding_model
+                        )
+                        # Force garbage collection after each batch
+                        import gc
+                        gc.collect()
+                        
+                except Exception as e:
+                    logging.error(f"Failed to load existing index: {e}")
+                    # Fall through to create new index
             else:
                 logging.info("No existing index found, creating new one")
-                # Create new index with inner product similarity
+                
+                # Create new index
                 vector_store = FaissVectorStore(
                     faiss.IndexFlatIP(self.embedding_dimension)
                 )
@@ -280,45 +323,37 @@ class IndexingService:
                     persist_dir=str(index_path)
                 )
                 
-                # Create index from documents
-                logging.info(f"Creating new index with {len(documents)} documents")
-                index = VectorStoreIndex.from_documents(
-                    documents,
-                    storage_context=storage_context,
-                    embedding=self.embedding_model,
-                    show_progress=True
-                )
-                logging.info("Created new FAISS index in memory")
-
-            # Persist only necessary components
-            logging.info(f"Attempting to persist index to {index_path}")
-            try:
-                # Persist vector store in FAISS format only
-                vector_store.persist(persist_path=str(index_path / faiss_file))
-                logging.info("Vector store persisted in FAISS format")
-                
-                # Persist only metadata and supporting files (docstore, index_store)
-                # but skip persisting the vector store again in JSON format
-                storage_context.persist(persist_dir=str(index_path))
-                logging.info("Supporting metadata persisted successfully")
-                
-                # Clean up any duplicate vector store in JSON format if it exists
-                json_file = index_path / "default__vector_store.json"
-                if json_file.exists():
-                    json_file.unlink()
-                    logging.info("Removed duplicate JSON vector store")
-                
-            except Exception as persist_error:
-                logging.error(f"Error during persistence: {str(persist_error)}", exc_info=True)
-                raise
+                # Process documents in batches
+                for i in range(0, len(documents), batch_size):
+                    batch = documents[i:i + batch_size]
+                    index = VectorStoreIndex.from_documents(
+                        batch,
+                        storage_context=storage_context,
+                        embedding=self.embedding_model
+                    )
+                    # Force garbage collection after each batch
+                    import gc
+                    gc.collect()
             
-            # Verify the index was saved
-            if (index_path / faiss_file).exists():
-                file_size = (index_path / faiss_file).stat().st_size
-                logging.info(f"FAISS index successfully persisted at {index_path / faiss_file} (size: {file_size:,} bytes)")
-            else:
-                raise FileNotFoundError(f"FAISS index file not found after persistence attempt: {index_path / faiss_file}")
+            # Persist the index
+            if vector_store:
+                vector_store.persist(persist_path=str(index_path / faiss_file))
+            if storage_context:
+                storage_context.persist(persist_dir=str(index_path))
+                
+            # Clean up any duplicate vector store in JSON format if it exists
+            json_file = index_path / "default__vector_store.json"
+            if json_file.exists():
+                json_file.unlink()
+                
+            return True, ""
 
         except Exception as e:
-            logging.error(f"Failed to create/update FAISS index: {str(e)}", exc_info=True)
-            raise 
+            error_msg = f"Failed to create/update FAISS index: {str(e)}"
+            logging.error(error_msg)
+            
+            # Ensure cleanup even on error
+            import gc
+            gc.collect()
+            
+            return False, error_msg 

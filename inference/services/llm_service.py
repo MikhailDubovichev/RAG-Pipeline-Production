@@ -114,7 +114,8 @@ class LLMService:
                 f"Question: {query}\n\n"
                 f"Context:\n{context}\n\n"
                 "Based on the provided context, is there enough relevant information to answer the question? "
-                "Respond with 'Yes' or 'No'. If yes, provide the answer; otherwise, say 'No relevant information available.'"
+                "Respond with 'Yes, there is enough information to answer the question' or 'No, there is not enough information to answer the question'."
+                "If yes, say that you have enough information to answer the question and provide the answer; otherwise, say 'No relevant information available.'"
             )
             
             logging.info("Sending request to LLM")
@@ -132,21 +133,19 @@ class LLMService:
             logging.error(f"LLM generation failed: {str(e)}", exc_info=True)
             return "An error occurred while generating the response. Please try again later.", []
 
-    def format_response_with_references(self, 
-                                     response: str, 
-                                     search_results: List[Tuple[str, float, Dict]]) -> str:
+    def format_response_with_references(self, response: str, search_results: List[Tuple[str, float, Dict]]) -> str:
         """
-        Format the LLM response with detailed source references.
+        Format the LLM response with detailed PDF source references.
         
         This method enhances responses with:
-        1. Source attribution
-        2. Metadata details
+        1. PDF source attribution
+        2. PDF metadata details
         3. Text previews
         4. Structured formatting
         
         The formatting includes:
-        - Source filenames
-        - Location details (page, slide, etc.)
+        - Source PDF filenames
+        - Location details (page number)
         - Content previews
         - Clean, readable layout
         
@@ -156,10 +155,7 @@ class LLMService:
                 - str: Document text content
                 - float: Relevance score
                 - Dict: Document metadata including:
-                    - source: Document source/filename
-                    - sheet: Excel sheet name
-                    - row_number: Spreadsheet row
-                    - slide_number: Presentation slide
+                    - source: PDF filename
                     - section: Document section
                     - page_number: PDF page
                     - chunk_number: Position in document
@@ -170,11 +166,15 @@ class LLMService:
                 <response text>
                 
                 Sources:
-                - Source: doc.pdf, Page: 5: "Text preview..."
-                - Source: sheet.xlsx, Sheet: Data, Row: 3: "Text preview..."
+                
+                - Document: document.pdf
+                  Page: 5
+                  Created: September 2024
+                  Content: "Text preview..."
                 
         Note:
             - Handles missing metadata gracefully
+            - Extracts page numbers and dates from content when not in metadata
             - Truncates long text previews
             - Maintains readable formatting
         """
@@ -186,23 +186,65 @@ class LLMService:
         references = []
         for text, score, metadata in search_results:
             if metadata:
-                ref_parts = []
+                # Format source information in a more readable way
+                source_info = []
                 
-                # Add source information
-                ref_parts.append(f"Source: {metadata.get('source', 'Unknown Source')}")
+                # Document name
+                source_info.append(f"Document: {metadata.get('source', 'Unknown Source')}")
                 
-                # Add additional metadata if available
-                for key in ['sheet', 'row_number', 'slide_number', 'section', 
-                           'page_number', 'chunk_number', 'total_chunks_in_section']:
-                    if metadata.get(key):
-                        ref_parts.append(f"{key.replace('_', ' ').title()}: {metadata[key]}")
+                # Extract information from text if it's in a common format
+                # This handles cases where metadata is embedded in the text content
+                page_number = None
+                creation_date = None
+                actual_content = text
+                
+                # Try to extract page number and date from text content
+                lines = text.split('\n')
+                if len(lines) >= 3:
+                    # Check if second line might be a page number
+                    if len(lines) > 1 and lines[1].strip().isdigit():
+                        page_number = lines[1].strip()
+                        
+                    # Check if third line might be a date
+                    if len(lines) > 2 and "20" in lines[2]:  # Simple check for year
+                        creation_date = lines[2].strip()
+                    
+                    # Remove metadata lines from content if we extracted them
+                    if page_number or creation_date:
+                        # Skip the first few lines that contain metadata
+                        metadata_lines = 3  # Usually section name, page number, date
+                        actual_content = '\n'.join(lines[metadata_lines:])
+                
+                # Page number with proper formatting
+                if metadata.get('page_number'):
+                    source_info.append(f"Page: {metadata.get('page_number')}")
+                elif page_number:
+                    source_info.append(f"Page: {page_number}")
+                
+                # Section information if available
+                if metadata.get('section'):
+                    source_info.append(f"Section: {metadata.get('section')}")
+                elif len(lines) > 0:
+                    # First line might be section
+                    source_info.append(f"Section: {lines[0].strip()}")
+                
+                # Creation date if available
+                if metadata.get('creation_date'):
+                    source_info.append(f"Created: {metadata.get('creation_date')}")
+                elif creation_date:
+                    source_info.append(f"Created: {creation_date}")
                 
                 # Add text preview with truncation
-                text_preview = text[:50] + "..." if len(text) > 50 else text
-                references.append(f"{', '.join(ref_parts)}: {text_preview}")
+                text_preview = actual_content.strip()
+                if len(text_preview) > 150:
+                    text_preview = text_preview[:150] + "..."
+                source_info.append(f"Content: \"{text_preview}\"")
+                
+                # Join all parts with newlines and proper indentation
+                references.append("\n  ".join(source_info))
             else:
-                references.append(f"Unknown Source: {text[:50]}...")
+                references.append(f"Unknown Source:\n  Content: \"{text[:150]}...\"")
 
         # Format final response with references
-        references_text = "\n".join([f"- {ref}" for ref in references])
-        return f"{response}\n\nSources:\n{references_text}" 
+        references_text = "\n\n- ".join(references)
+        return f"{response}\n\nSources:\n\n- {references_text}" 

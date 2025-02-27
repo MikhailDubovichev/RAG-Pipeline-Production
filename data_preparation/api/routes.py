@@ -43,7 +43,18 @@ class DataPrepService:
         self.config = config
 
     async def upload_file(self, file: UploadFile) -> Dict[str, str]:
-        """Handle file upload request."""
+        """
+        Handle file upload request.
+        
+        Args:
+            file (UploadFile): The uploaded file object
+            
+        Returns:
+            Dict[str, str]: Response message
+            
+        Raises:
+            HTTPException: If file upload fails
+        """
         try:
             # Verify file extension
             file_ext = Path(file.filename).suffix.lower()
@@ -52,11 +63,33 @@ class DataPrepService:
                 
             file_path = Path(self.config['directories']['to_process_dir']) / file.filename
             
-            with open(file_path, "wb") as f:
-                f.write(await file.read())
-                
-            logger.info(f"File {file.filename} uploaded successfully.")
-            return {"message": f"File {file.filename} uploaded successfully."}
+            # Ensure directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # Use context manager for file operations
+            content = await file.read()
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(content)
+                    
+                # Verify file was written successfully
+                if not file_path.exists() or file_path.stat().st_size == 0:
+                    raise IOError(f"Failed to write file or file is empty: {file_path}")
+                    
+                logger.info(f"File {file.filename} uploaded successfully (size: {file_path.stat().st_size} bytes)")
+                return {"message": f"File {file.filename} uploaded successfully."}
+            except PermissionError as e:
+                logger.error(f"Permission denied when writing file: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Permission denied when writing file: {str(e)}"
+                )
+            except IOError as e:
+                logger.error(f"IO error when writing file: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"IO error when writing file: {str(e)}"
+                )
             
         except ValueError as ve:
             logger.error(f"Invalid file type: {str(ve)}")
@@ -66,6 +99,7 @@ class DataPrepService:
             )
         except Exception as e:
             logger.error(f"Error uploading file: {e}")
+            logger.exception("Detailed error information:")
             raise HTTPException(
                 status_code=500,
                 detail=f"File upload failed: {str(e)}"
@@ -94,7 +128,9 @@ class DataPrepService:
             processed_files_record_pdf = Path(self.config['directories']['processed_dir']) / "processed_files_pdf.json"
 
             # Load records of previously processed files
-            processed_files_pdf = self.file_service.load_processed_files(processed_files_record_pdf)
+            processed_files_pdf, error_msg = self.file_service.load_processed_files(processed_files_record_pdf)
+            if error_msg:
+                logger.warning(f"Issue loading processed files record: {error_msg}")
 
             # Get all PDF files
             pdf_files = self.file_service.get_files_by_type()
@@ -104,29 +140,54 @@ class DataPrepService:
 
             # Process new documents
             all_new_docs = []
+            failed_files = []
             
             if new_pdf_files:
-                pdf_docs = self.doc_processor.load_pdf_docs(new_pdf_files)
+                logger.info(f"Processing {len(new_pdf_files)} new PDF files")
+                pdf_docs, pdf_failed = self.doc_processor.load_pdf_docs(new_pdf_files)
                 all_new_docs.extend(pdf_docs)
+                failed_files.extend(pdf_failed)
+                logger.info(f"Successfully processed {len(pdf_docs)} documents, failed to process {len(pdf_failed)} files")
 
             # Update indices if we have new documents
             if all_new_docs:
-                self.indexing_service.create_or_update_whoosh_index(
+                logger.info(f"Updating search indices with {len(all_new_docs)} new documents")
+                
+                # Update Whoosh index
+                whoosh_success, whoosh_error, failed_doc_ids = self.indexing_service.create_or_update_whoosh_index(
                     all_new_docs, 
                     Path(self.config['directories']['whoosh_index_path'])
                 )
-                self.indexing_service.create_or_update_faiss_index(
+                if not whoosh_success:
+                    logger.error(f"Failed to update Whoosh index: {whoosh_error}")
+                elif failed_doc_ids:
+                    logger.warning(f"Some documents failed to be indexed in Whoosh: {len(failed_doc_ids)} failures")
+                
+                # Update FAISS index
+                faiss_success, faiss_error = self.indexing_service.create_or_update_faiss_index(
                     all_new_docs, 
                     Path(self.config['directories']['faiss_index_path'])
                 )
+                if not faiss_success:
+                    logger.error(f"Failed to update FAISS index: {faiss_error}")
 
                 # Move processed files and update records
-                self.file_service.move_to_processed(new_pdf_files)
-                self.file_service.update_processed_files_record(processed_files_record_pdf, new_pdf_files)
+                successful_moves, failed_moves = self.file_service.move_to_processed(new_pdf_files)
+                if failed_moves:
+                    logger.warning(f"Failed to move {len(failed_moves)} files to processed directory")
+                
+                # Update processed files record
+                record_success, record_error = self.file_service.update_processed_files_record(
+                    processed_files_record_pdf, 
+                    successful_moves
+                )
+                if not record_success:
+                    logger.error(f"Failed to update processed files record: {record_error}")
 
             return len(all_new_docs)
         except Exception as e:
             logger.error(f"Error in document processing: {e}")
+            logger.exception("Detailed error information:")
             raise
 
     def process_documents_with_response(self) -> Dict[str, str]:

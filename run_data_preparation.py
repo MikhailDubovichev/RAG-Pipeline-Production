@@ -13,7 +13,17 @@ import os
 from pathlib import Path
 
 def check_environment():
-    """Check if all required directories and files exist."""
+    """
+    Check if all required directories and files exist.
+    
+    This function verifies that the necessary configuration files exist
+    and creates required directories if they don't exist.
+    
+    Returns:
+        tuple: (bool, str) - Success status and error message if any
+            - First element is True if environment is valid, False otherwise
+            - Second element is an error message if validation failed, empty string otherwise
+    """
     required_files = [
         Path("config/config.sample.json"),
         Path(".env"),
@@ -28,14 +38,24 @@ def check_environment():
     # Check files
     for file_path in required_files:
         if not file_path.is_file():
-            print(f"Error: Required file {file_path} not found!")
-            return False
-            
+            error_msg = f"Required file {file_path} not found!"
+            print(f"Error: {error_msg}")
+            return False, error_msg
+    
     # Create directories if they don't exist
-    for dir_path in required_dirs:
-        dir_path.mkdir(parents=True, exist_ok=True)
+    try:
+        for dir_path in required_dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
+    except PermissionError as e:
+        error_msg = f"Permission denied when creating directory: {e}"
+        print(f"Error: {error_msg}")
+        return False, error_msg
+    except OSError as e:
+        error_msg = f"Operating system error when creating directory: {e}"
+        print(f"Error: {error_msg}")
+        return False, error_msg
         
-    return True
+    return True, ""
 
 def main():
     """Main entry point for the data preparation pipeline."""
@@ -47,7 +67,9 @@ def main():
         sys.path.insert(0, current_dir)
     
     # Check environment
-    if not check_environment():
+    env_valid, error_msg = check_environment()
+    if not env_valid:
+        print(f"Environment check failed: {error_msg}")
         sys.exit(1)
     
     try:
