@@ -149,13 +149,13 @@ class DocumentProcessor:
                     
                 # Assign document IDs and metadata
                 try:
-                docs = self._assign_doc_ids(docs)
-                for doc in docs:
-                    doc = self._extract_metadata(doc, source_file=pdf_path.name)
-                    
-                # Add to the collection
-                all_docs.extend(docs)
-                logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
+                    docs = self._assign_doc_ids(docs)
+                    for doc in docs:
+                        doc = self._extract_metadata(doc, source_file=pdf_path.name)
+                        
+                    # Add to the collection
+                    all_docs.extend(docs)
+                    logger.info(f"Successfully processed PDF: {pdf_path.name} - extracted {len(docs)} pages")
                 except Exception as e:
                     error_msg = f"Error assigning metadata to documents: {e}"
                     logger.error(error_msg)

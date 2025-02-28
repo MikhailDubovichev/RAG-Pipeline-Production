@@ -260,80 +260,65 @@ class IndexingService:
 
     def create_or_update_faiss_index(self, documents: List[Document], index_path: Path) -> tuple[bool, str]:
         """
-        Create or update the FAISS index for semantic search.
+        Create or update a FAISS vector index for semantic search.
+        
+        This method:
+        1. Creates a new FAISS index if none exists
+        2. Updates an existing index with new documents
+        3. Handles batching for memory efficiency
+        4. Safe updates and persistence
+        
+        FAISS provides efficient similarity search for dense vectors,
+        which is ideal for semantic search applications.
         
         Args:
-            documents (List[Document]): Documents to index
-            index_path (Path): Directory for index storage
+            documents (List[Document]): List of documents to index
+            index_path (Path): Directory to store the index
             
         Returns:
-            tuple: (bool, str) - Success status and error message if any
+            tuple: (bool, str) - Success status and message
+                - First element is True if indexing succeeded, False otherwise
+                - Second element is a success or error message
         """
+        if not documents:
+            return False, "No documents to index"
+            
         try:
             faiss_file = "default__vector_store.faiss"
             logging.info(f"Attempting to create/update FAISS index at {index_path / faiss_file}")
             
-            # Create directory if it doesn't exist
+            # Create index directory if it doesn't exist
             index_path.mkdir(parents=True, exist_ok=True)
+            
+            # Clean up existing indices to prevent multiple index issue
+            self._cleanup_existing_indices(index_path)
             
             # Process documents in batches to manage memory
             batch_size = 100  # Adjust based on document size and available memory
             
-            # Check for existing index
-            if (index_path / faiss_file).exists():
-                logging.info(f"Found existing FAISS index at {index_path / faiss_file}")
-                try:
-                    # Load existing index
-                    vector_store = FaissVectorStore.from_persist_path(
-                        str(index_path / faiss_file)
-                    )
-                    storage_context = StorageContext.from_defaults(
-                        vector_store=vector_store,
-                        docstore=SimpleDocumentStore(),
-                        index_store=SimpleIndexStore(),
-                        persist_dir=str(index_path)
-                    )
-                    
-                    # Process documents in batches
-                    for i in range(0, len(documents), batch_size):
-                        batch = documents[i:i + batch_size]
-                        index = VectorStoreIndex.from_documents(
-                            batch,
-                            storage_context=storage_context,
-                            embedding=self.embedding_model
-                        )
-                        # Force garbage collection after each batch
-                        import gc
-                        gc.collect()
-                        
-                except Exception as e:
-                    logging.error(f"Failed to load existing index: {e}")
-                    # Fall through to create new index
-            else:
-                logging.info("No existing index found, creating new one")
-                
-                # Create new index
-                vector_store = FaissVectorStore(
-                    faiss.IndexFlatIP(self.embedding_dimension)
+            # Create new index (since we cleaned up any existing ones)
+            vector_store = FaissVectorStore(
+                faiss.IndexFlatIP(self.embedding_dimension)
+            )
+            storage_context = StorageContext.from_defaults(
+                vector_store=vector_store,
+                docstore=SimpleDocumentStore(),
+                index_store=SimpleIndexStore(),
+                persist_dir=str(index_path)
+            )
+            
+            # Process documents in batches with a consistent index_id
+            for i in range(0, len(documents), batch_size):
+                batch = documents[i:i + batch_size]
+                index = VectorStoreIndex.from_documents(
+                    batch,
+                    storage_context=storage_context,
+                    embedding=self.embedding_model,
+                    index_id="vector_index"  # Use a consistent index_id
                 )
-                storage_context = StorageContext.from_defaults(
-                    vector_store=vector_store,
-                    docstore=SimpleDocumentStore(),
-                    index_store=SimpleIndexStore(),
-                    persist_dir=str(index_path)
-                )
-                
-                # Process documents in batches
-                for i in range(0, len(documents), batch_size):
-                    batch = documents[i:i + batch_size]
-                    index = VectorStoreIndex.from_documents(
-                        batch,
-                        storage_context=storage_context,
-                        embedding=self.embedding_model
-                    )
-                    # Force garbage collection after each batch
-                    import gc
-                    gc.collect()
+                # Force garbage collection after each batch
+                import gc
+                gc.collect()
             
             # Persist the index
             if vector_store:
@@ -347,13 +332,55 @@ class IndexingService:
                 json_file.unlink()
                 
             return True, ""
-
-        except Exception as e:
-            error_msg = f"Failed to create/update FAISS index: {str(e)}"
-            logging.error(error_msg)
             
-            # Ensure cleanup even on error
-            import gc
-            gc.collect()
+        except Exception as e:
+            error_msg = f"Failed to create/update FAISS index: {e}"
+            logging.error(error_msg)
+            logging.exception("Detailed error information:")
             
             return False, error_msg 
+
+    def _cleanup_existing_indices(self, index_path: Path) -> None:
+        """
+        Clean up existing indices to prevent the multiple index issue.
+        
+        This method removes index files that might cause conflicts when
+        loading indices during inference.
+        
+        Args:
+            index_path (Path): Directory containing the indices
+        """
+        import shutil
+        import os
+        
+        # List of patterns to clean up
+        patterns = [
+            "*.faiss",  # FAISS index files
+            "docstore.json",  # Document store
+            "index_store.json",  # Index metadata
+            "vector_store.json",  # Vector store metadata
+            "*.bin"  # Any binary files
+        ]
+        
+        try:
+            # Only clean up if the directory exists
+            if not index_path.exists():
+                return
+                
+            # Remove files matching patterns
+            for pattern in patterns:
+                for file_path in index_path.glob(pattern):
+                    if file_path.is_file():
+                        os.remove(file_path)
+                        logger.info(f"Removed old index file: {file_path}")
+                        
+            # Remove subdirectories if any
+            for item in index_path.iterdir():
+                if item.is_dir():
+                    shutil.rmtree(item)
+                    logger.info(f"Removed old index directory: {item}")
+                    
+            logger.info(f"Cleaned up existing indices in {index_path}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up indices: {e}")
+            # Continue with index creation even if cleanup fails 
