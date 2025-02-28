@@ -110,6 +110,10 @@ def main():
     """Main entry point for the application."""
     global config, doc_processor, indexing_service, file_service
     
+    # Track resources that need cleanup
+    server = None
+    uvicorn_thread = None
+    
     try:
         # Load configuration
         config = load_config(Path("config/config.json"))
@@ -185,10 +189,30 @@ def main():
         else:
             logging.info("CI/CD environment detected. Running processing only.")
             from .api.routes import data_prep_service
-            data_prep_service.process_documents()
+            try:
+                num_processed = data_prep_service.process_documents()
+                logging.info(f"Processed {num_processed} documents in CI/CD mode")
+            except Exception as e:
+                logging.error(f"Document processing failed in CI/CD mode: {e}")
+                raise
+            finally:
+                # Force cleanup in CI/CD mode
+                import gc
+                gc.collect()
             
     except Exception as e:
         logging.error(f"Application startup failed: {e}")
+        
+        # Cleanup on error
+        if uvicorn_thread and uvicorn_thread.is_alive():
+            logging.info("Shutting down FastAPI server thread")
+            if server:
+                server.should_exit = True
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
         raise
 
 if __name__ == "__main__":

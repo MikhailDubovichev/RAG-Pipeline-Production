@@ -114,7 +114,8 @@ class LLMService:
                 f"Question: {query}\n\n"
                 f"Context:\n{context}\n\n"
                 "Based on the provided context, is there enough relevant information to answer the question? "
-                "Respond with 'Yes' or 'No'. If yes, provide the answer; otherwise, say 'No relevant information available.'"
+                "Respond with 'Yes, there is enough information to answer the question' or 'No, there is not enough information to answer the question'."
+                "If yes, say that you have enough information to answer the question and provide the answer; otherwise, say 'No relevant information available.'"
             )
             
             logging.info("Sending request to LLM")
@@ -132,51 +133,32 @@ class LLMService:
             logging.error(f"LLM generation failed: {str(e)}", exc_info=True)
             return "An error occurred while generating the response. Please try again later.", []
 
-    def format_response_with_references(self, 
-                                     response: str, 
-                                     search_results: List[Tuple[str, float, Dict]]) -> str:
+    def format_response_with_references(self, response: str, search_results: List[Tuple[str, float, Dict]]) -> str:
         """
-        Format the LLM response with detailed source references.
+        Format the LLM response with detailed PDF source references.
         
         This method enhances responses with:
-        1. Source attribution
-        2. Metadata details
+        1. PDF source attribution
+        2. PDF metadata details
         3. Text previews
         4. Structured formatting
-        
-        The formatting includes:
-        - Source filenames
-        - Location details (page, slide, etc.)
-        - Content previews
-        - Clean, readable layout
+        5. Similarity scores for relevance analysis
         
         Args:
             response (str): Raw LLM-generated response
             search_results (List[Tuple[str, float, Dict]]): Search results containing:
                 - str: Document text content
-                - float: Relevance score
-                - Dict: Document metadata including:
-                    - source: Document source/filename
-                    - sheet: Excel sheet name
-                    - row_number: Spreadsheet row
-                    - slide_number: Presentation slide
-                    - section: Document section
-                    - page_number: PDF page
-                    - chunk_number: Position in document
-                    - total_chunks_in_section: Total chunks
+                - float: Relevance score (dot product/similarity score)
+                - Dict: Document metadata
                 
         Returns:
-            str: Formatted response with references in the format:
-                <response text>
-                
-                Sources:
-                - Source: doc.pdf, Page: 5: "Text preview..."
-                - Source: sheet.xlsx, Sheet: Data, Row: 3: "Text preview..."
+            str: Formatted response with references including similarity scores
                 
         Note:
             - Handles missing metadata gracefully
             - Truncates long text previews
             - Maintains readable formatting
+            - Includes similarity scores for threshold tuning
         """
         # Return as is if no relevant information
         if response.lower() == 'no relevant information available.':
@@ -185,24 +167,44 @@ class LLMService:
         # Build reference list
         references = []
         for text, score, metadata in search_results:
-            if metadata:
-                ref_parts = []
-                
-                # Add source information
-                ref_parts.append(f"Source: {metadata.get('source', 'Unknown Source')}")
-                
-                # Add additional metadata if available
-                for key in ['sheet', 'row_number', 'slide_number', 'section', 
-                           'page_number', 'chunk_number', 'total_chunks_in_section']:
-                    if metadata.get(key):
-                        ref_parts.append(f"{key.replace('_', ' ').title()}: {metadata[key]}")
-                
-                # Add text preview with truncation
-                text_preview = text[:50] + "..." if len(text) > 50 else text
-                references.append(f"{', '.join(ref_parts)}: {text_preview}")
-            else:
-                references.append(f"Unknown Source: {text[:50]}...")
+            # Format source information in a more readable way
+            source_info = []
+            
+            # Document name
+            source_info.append(f"Document: {metadata.get('source', 'Unknown Source')}")
+            
+            # Extract page number from the first few lines if it's a number on its own line
+            lines = text.split('\n')
+            content_start = 0
+            
+            # Try to identify the structure of the content
+            if len(lines) >= 2 and lines[1].strip().isdigit():
+                # Add page number
+                source_info.append(f"Page: {lines[1].strip()}")
+                content_start = 3  # Skip section name, page number, and date
+            elif metadata.get('page_number'):
+                # Use metadata page number if available
+                source_info.append(f"Page: {metadata.get('page_number')}")
+            
+            # Add section if available
+            if len(lines) > 0 and content_start > 0:
+                source_info.append(f"Section: {lines[0].strip()}")
+            elif metadata.get('section'):
+                source_info.append(f"Section: {metadata.get('section')}")
+            
+            # Add similarity score (rounded to 4 decimal places for readability)
+            source_info.append(f"Relevance: {score:.4f}")
+            
+            # Add content preview
+            content_text = '\n'.join(lines[content_start:]) if content_start > 0 else text
+            content_text = content_text.strip()
+            if len(content_text) > 150:
+                content_text = content_text[:150] + "..."
+            source_info.append(f"Content: \"{content_text}\"")
+            
+            # Join all parts with newlines and proper indentation
+            references.append("\n  ".join(source_info))
 
         # Format final response with references
-        references_text = "\n".join([f"- {ref}" for ref in references])
-        return f"{response}\n\nSources:\n{references_text}" 
+        references_text = "\n\n- ".join(references)
+        return f"{response}\n\nSources:\n\n- {references_text}" 

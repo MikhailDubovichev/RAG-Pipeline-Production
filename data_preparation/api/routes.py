@@ -43,18 +43,63 @@ class DataPrepService:
         self.config = config
 
     async def upload_file(self, file: UploadFile) -> Dict[str, str]:
-        """Handle file upload request."""
+        """
+        Handle file upload request.
+        
+        Args:
+            file (UploadFile): The uploaded file object
+            
+        Returns:
+            Dict[str, str]: Response message
+            
+        Raises:
+            HTTPException: If file upload fails
+        """
         try:
+            # Verify file extension
+            file_ext = Path(file.filename).suffix.lower()
+            if file_ext != '.pdf':
+                raise ValueError(f"Unsupported file type: {file_ext}. Only PDF files are supported.")
+                
             file_path = Path(self.config['directories']['to_process_dir']) / file.filename
             
-            with open(file_path, "wb") as f:
-                f.write(await file.read())
-                
-            logger.info(f"File {file.filename} uploaded successfully.")
-            return {"message": f"File {file.filename} uploaded successfully."}
+            # Ensure directory exists
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # Use context manager for file operations
+            content = await file.read()
+            try:
+                with open(file_path, "wb") as f:
+                    f.write(content)
+                    
+                # Verify file was written successfully
+                if not file_path.exists() or file_path.stat().st_size == 0:
+                    raise IOError(f"Failed to write file or file is empty: {file_path}")
+                    
+                logger.info(f"File {file.filename} uploaded successfully (size: {file_path.stat().st_size} bytes)")
+                return {"message": f"File {file.filename} uploaded successfully."}
+            except PermissionError as e:
+                logger.error(f"Permission denied when writing file: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Permission denied when writing file: {str(e)}"
+                )
+            except IOError as e:
+                logger.error(f"IO error when writing file: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"IO error when writing file: {str(e)}"
+                )
+            
+        except ValueError as ve:
+            logger.error(f"Invalid file type: {str(ve)}")
+            raise HTTPException(
+                status_code=400,
+                detail=str(ve)
+            )
         except Exception as e:
             logger.error(f"Error uploading file: {e}")
+            logger.exception("Detailed error information:")
             raise HTTPException(
                 status_code=500,
                 detail=f"File upload failed: {str(e)}"
@@ -67,7 +112,7 @@ class DataPrepService:
         This method performs the main document processing workflow:
         1. Loads records of previously processed files
         2. Identifies new files that need processing
-        3. Processes documents by type (PDF, Excel, PowerPoint, Word)
+        3. Processes PDF documents
         4. Updates search indices with new content
         5. Moves processed files to archive
         6. Updates processing records
@@ -79,71 +124,70 @@ class DataPrepService:
             Exception: Any error during processing is logged and re-raised
         """
         try:
-            # Get paths for record keeping
+            # Get path for record keeping
             processed_files_record_pdf = Path(self.config['directories']['processed_dir']) / "processed_files_pdf.json"
-            processed_files_record_excel = Path(self.config['directories']['processed_dir']) / "processed_files_excel.json"
-            processed_files_record_ppt = Path(self.config['directories']['processed_dir']) / "processed_files_ppt.json"
-            processed_files_record_doc = Path(self.config['directories']['processed_dir']) / "processed_files_doc.json"
 
             # Load records of previously processed files
-            processed_files_pdf = self.file_service.load_processed_files(processed_files_record_pdf)
-            processed_files_excel = self.file_service.load_processed_files(processed_files_record_excel)
-            processed_files_ppt = self.file_service.load_processed_files(processed_files_record_ppt)
-            processed_files_doc = self.file_service.load_processed_files(processed_files_record_doc)
+            processed_files_pdf, error_msg = self.file_service.load_processed_files(processed_files_record_pdf)
+            if error_msg:
+                logger.warning(f"Issue loading processed files record: {error_msg}")
 
-            # Get all files by type
-            pdf_files, excel_files, ppt_files, doc_files = self.file_service.get_files_by_type()
+            # Get all PDF files
+            pdf_files = self.file_service.get_files_by_type()
 
             # Identify new files
             new_pdf_files = self.file_service.get_new_files(pdf_files, processed_files_pdf)
-            new_excel_files = self.file_service.get_new_files(excel_files, processed_files_excel)
-            new_ppt_files = self.file_service.get_new_files(ppt_files, processed_files_ppt)
-            new_doc_files = self.file_service.get_new_files(doc_files, processed_files_doc)
 
             # Process new documents
             all_new_docs = []
+            failed_files = []
             
             if new_pdf_files:
-                pdf_docs = self.doc_processor.load_pdf_docs(new_pdf_files)
+                logger.info(f"Processing {len(new_pdf_files)} new PDF files")
+                pdf_docs, pdf_failed = self.doc_processor.load_pdf_docs(new_pdf_files)
                 all_new_docs.extend(pdf_docs)
-                
-            if new_excel_files:
-                excel_docs = self.doc_processor.load_excel_docs(new_excel_files)
-                all_new_docs.extend(excel_docs)
-                
-            if new_ppt_files:
-                ppt_docs = self.doc_processor.load_ppt_docs(new_ppt_files)
-                all_new_docs.extend(ppt_docs)
-                
-            if new_doc_files:
-                doc_docs = self.doc_processor.load_doc_docs(new_doc_files)
-                all_new_docs.extend(doc_docs)
+                failed_files.extend(pdf_failed)
+                logger.info(f"Successfully processed {len(pdf_docs)} documents, failed to process {len(pdf_failed)} files")
 
             # Update indices if we have new documents
             if all_new_docs:
-                self.indexing_service.create_or_update_whoosh_index(
+                logger.info(f"Updating search indices with {len(all_new_docs)} new documents")
+                
+                # Update Whoosh index
+                whoosh_success, whoosh_error, failed_doc_ids = self.indexing_service.create_or_update_whoosh_index(
                     all_new_docs, 
                     Path(self.config['directories']['whoosh_index_path'])
                 )
-                self.indexing_service.create_or_update_faiss_index(
+                if not whoosh_success:
+                    logger.error(f"Failed to update Whoosh index: {whoosh_error}")
+                elif failed_doc_ids:
+                    logger.warning(f"Some documents failed to be indexed in Whoosh: {len(failed_doc_ids)} failures")
+                
+                # Update FAISS index
+                faiss_success, faiss_error = self.indexing_service.create_or_update_faiss_index(
                     all_new_docs, 
                     Path(self.config['directories']['faiss_index_path'])
                 )
+                if not faiss_success:
+                    logger.error(f"Failed to update FAISS index: {faiss_error}")
 
                 # Move processed files and update records
-                self.file_service.move_to_processed(new_pdf_files)
-                self.file_service.move_to_processed(new_excel_files)
-                self.file_service.move_to_processed(new_ppt_files)
-                self.file_service.move_to_processed(new_doc_files)
-
-                self.file_service.update_processed_files_record(processed_files_record_pdf, new_pdf_files)
-                self.file_service.update_processed_files_record(processed_files_record_excel, new_excel_files)
-                self.file_service.update_processed_files_record(processed_files_record_ppt, new_ppt_files)
-                self.file_service.update_processed_files_record(processed_files_record_doc, new_doc_files)
+                successful_moves, failed_moves = self.file_service.move_to_processed(new_pdf_files)
+                if failed_moves:
+                    logger.warning(f"Failed to move {len(failed_moves)} files to processed directory")
+                
+                # Update processed files record
+                record_success, record_error = self.file_service.update_processed_files_record(
+                    processed_files_record_pdf, 
+                    successful_moves
+                )
+                if not record_success:
+                    logger.error(f"Failed to update processed files record: {record_error}")
 
             return len(all_new_docs)
         except Exception as e:
             logger.error(f"Error in document processing: {e}")
+            logger.exception("Detailed error information:")
             raise
 
     def process_documents_with_response(self) -> Dict[str, str]:
@@ -173,10 +217,7 @@ async def upload_file(file: UploadFile):
     Upload a file for processing.
     
     Accepts:
-    - PDF files
-    - Excel files (.xls, .xlsx)
-    - PowerPoint files (.ppt, .pptx)
-    - Word documents (.doc, .docx)
+    - PDF files only
     """
     if not data_prep_service:
         raise HTTPException(

@@ -94,7 +94,7 @@ class GradioInterface:
             }
         """) as demo:
             gr.Markdown("### RAG Chatbot")
-            gr.Markdown("Ask any question about the documents in the knowledge base.")
+            gr.Markdown("Ask any question about the PDF documents in the knowledge base.")
 
             chatbot = gr.Chatbot(
                 label="Chat History",
@@ -105,7 +105,7 @@ class GradioInterface:
             with gr.Row():
                 msg = gr.Textbox(
                     lines=2,
-                    placeholder="Enter your question here...",
+                    placeholder="Enter your question about PDF documents...",
                     label="Your Question",
                     elem_id="user-input"
                 )

@@ -151,12 +151,6 @@ class SearchService:
                 - float: BM25 score (higher is better)
                 - Dict: Document metadata including:
                     - source: Document source/filename
-                    - sheet: Excel sheet name (if applicable)
-                    - row_number: Spreadsheet row (if applicable)
-                    - slide_number: Presentation slide (if applicable)
-                    - section: Document section/heading
-                    - chunk_number: Position in chunked document
-                    - total_chunks_in_section: Total chunks
                     - page_number: PDF page number (if applicable)
                     - doc_id: Unique document identifier
                 
@@ -171,18 +165,12 @@ class SearchService:
                 parsed_query = parser.parse(query)
                 results = searcher.search(parsed_query, limit=top_k)
                 
-                # Format results with all metadata
+                # Format results with PDF-specific metadata
                 return [
                     (hit["content"], 
                      hit.score, 
                      {
                         "source": hit.get("source", "Unknown Source"),
-                        "sheet": hit.get("sheet"),
-                        "row_number": hit.get("row_number"),
-                        "slide_number": hit.get("slide_number"),
-                        "section": hit.get("section"),
-                        "chunk_number": hit.get("chunk_number"),
-                        "total_chunks_in_section": hit.get("total_chunks_in_section"),
                         "page_number": hit.get("page_number"),
                         "doc_id": hit.get("doc_id"),
                      }) 
