@@ -1,6 +1,6 @@
 # RAG Pipeline
 
-A RAG (Retrieval-Augmented Generation) pipeline with separate data preparation and inference components.
+A RAG (Retrieval-Augmented Generation) pipeline with separate data preparation and inference components. This project is built based on the MVP for the "RAG-pipeline-MVP" (Jupiter Notebook), that also could be found in my GitHub repository. The pipeline uses LLM and embedding models from Nebius AI Studio platform.
 
 ## Architecture Overview
 
@@ -15,8 +15,8 @@ The data preparation pipeline is responsible for processing documents and creati
 2. **Core Components** (`data_preparation/`):
    - `main.py`: Orchestrates the document processing workflow
    - `services/`:
-     - `document_processor.py`: Handles document parsing and chunking
-     - `indexing_service.py`: Manages FAISS and Whoosh index creation
+     - `document_processor.py`: Handles document parsing and chunking using llama_index's PDFReader
+     - `indexing_service.py`: Manages VectorStoreIndex and Whoosh index creation
      - `file_service.py`: Handles file operations and tracking
    - `utils/`:
      - `config_utils.py`: Configuration management
@@ -25,7 +25,7 @@ The data preparation pipeline is responsible for processing documents and creati
 3. **Document Processing Flow**:
    ```
    Documents → DocumentProcessor → Chunks → IndexingService → Search Indices
-   └── PDF, Excel, PPT, Word    └── Text extraction    └── FAISS (Vector)
+   └── PDF, Excel, PPT, Word    └── Text extraction    └── VectorStoreIndex (Vector)
                                 └── Chunking           └── Whoosh (Keyword)
    ```
 
@@ -40,8 +40,8 @@ The inference pipeline handles user queries and generates responses. It uses a l
 2. **Core Components** (`inference/`):
    - `main.py`: Main application logic and service orchestration
    - `services/`:
-     - `search_service.py`: Hybrid search implementation (FAISS + Whoosh)
-     - `llm_service.py`: LLM interaction and response generation
+     - `search_service.py`: Hybrid search implementation (Vector + Whoosh)
+     - `llm_service.py`: LLM interaction and response generation using NebiusLLM
    - `api/`:
      - `routes.py`: FastAPI endpoints
    - `utils/`:
@@ -50,7 +50,7 @@ The inference pipeline handles user queries and generates responses. It uses a l
 3. **Query Processing Flow**:
    ```
    User Query → Search Service → LLM Service → Formatted Response
-                └── Vector Search (FAISS)   └── Context Integration
+                └── Vector Search          └── Context Integration
                 └── Keyword Search (Whoosh) └── Response Generation
                 └── Result Reranking        └── Reference Addition
    ```
@@ -115,9 +115,9 @@ This will:
 ### Search Implementation
 The pipeline implements a hybrid search strategy:
 
-1. **Vector Search (FAISS)**:
+1. **Vector Search**:
    - Semantic similarity using embeddings
-   - Efficient nearest neighbor search
+   - Efficient nearest neighbor search via VectorStoreIndex
    - Optimized for understanding meaning
 
 2. **Keyword Search (Whoosh)**:
@@ -134,7 +134,7 @@ The pipeline implements a hybrid search strategy:
 Documents are processed in several stages:
 
 1. **Text Extraction**:
-   - PDF: Page-by-page extraction
+   - PDF: Page-by-page extraction using llama_index's PDFReader
    - Excel: Row-by-row with column headers
    - PowerPoint: Slide-by-slide
    - Word: Section-based with heading structure
@@ -148,6 +148,24 @@ Documents are processed in several stages:
    - Incremental updates supported
    - Processed file tracking
    - Atomic index operations
+
+### LLM Integration
+The pipeline uses NebiusLLM for response generation:
+
+1. **Context Integration**:
+   - Combines search results with user query
+   - Optimized prompt engineering
+   - Relevance checking
+
+2. **Response Formatting**:
+   - Source attribution
+   - Metadata inclusion
+   - Structured output
+
+3. **Error Handling**:
+   - Graceful fallbacks
+   - User-friendly error messages
+   - Detailed logging
 
 ### Security and Configuration
 The pipeline implements several security measures:
@@ -167,165 +185,141 @@ The pipeline implements several security measures:
    - Detailed error reporting
    - User-friendly error messages
 
-Welcome to the RAG Pipeline repository! This project implements a Retrieval-Augmented Generation (RAG) system designed to process, index, and query various document types (PDF, Excel, PPT, DOCX) using advanced indexing techniques with FAISS and Whoosh. Enhanced by Large Language Models (LLMs), this pipeline facilitates efficient information retrieval and intelligent response generation tailored for specific domains.
+## Testing
+The project includes comprehensive test coverage:
 
-Features
-Multi-Format Document Processing: Supports PDF, Excel, PowerPoint, and Word documents.
-Advanced Indexing: Utilizes FAISS for vector-based similarity search and Whoosh for BM25 ranking.
-Chunking Mechanism: Splits large documents into manageable chunks based on token counts and headings.
-Hybrid Search Strategy: Combines vector search and BM25 ranking to enhance retrieval accuracy.
-Cross-Encoder Reranking: Refines search results using a cross-encoder model for improved relevance.
-Interactive Chatbot Interface: Provides a user-friendly Gradio-based chatbot for querying indexed data.
-Logging with Rotation: Implements robust logging mechanisms to monitor pipeline activities.
-Secure Configuration Management: Handles sensitive information securely using configuration files and environment variables.
-Scalable Deployment: Designed for easy deployment to platforms like Google Vertex AI.
+1. **Unit Tests**:
+   - Individual component testing
+   - Mock-based isolation
+   - Function-level validation
 
-Project Structure
+2. **Integration Tests**:
+   - Component interaction testing
+   - End-to-end pipeline validation
+   - Mock services for external dependencies
+
+3. **Test Configuration**:
+   - Temporary directories and files
+   - Isolated test environment
+   - Cleanup after test execution
+
+## Project Structure
+```
 rag_pipeline/
 ├── data_preparation/
-│ ├── init.py
-│ ├── main.py
-│ ├── processors/
-│ │ ├── init.py
-│ │ ├── pdf_processor.py
-│ │ ├── excel_processor.py
-│ │ ├── ppt_processor.py
-│ │ └── word_processor.py
-│ └── utils/
-│ ├── init.py
-│ ├── logging_utils.py
-│ ├── file_utils.py
-│ └── index_utils.py
-├── inference/
-│ ├── init.py
+│ ├── __init__.py
 │ ├── main.py
 │ ├── services/
-│ │ ├── init.py
-│ │ ├── search_service.py
-│ │ ├── reranking_service.py
-│ │ └── llm_service.py
+│ │ ├── __init__.py
+│ │ ├── document_processor.py
+│ │ ├── indexing_service.py
+│ │ └── file_service.py
 │ └── utils/
-│ ├── init.py
-│ ├── logging_utils.py
-│ └── response_formatter.py
+│   ├── __init__.py
+│   ├── logging_utils.py
+│   └── config_utils.py
+├── inference/
+│ ├── __init__.py
+│ ├── main.py
+│ ├── services/
+│ │ ├── __init__.py
+│ │ ├── search_service.py
+│ │ └── llm_service.py
+│ ├── api/
+│ │ ├── __init__.py
+│ │ └── routes.py
+│ └── utils/
+│   ├── __init__.py
+│   ├── logging_utils.py
+│   └── response_formatter.py
+├── common/
+│ ├── __init__.py
+│ ├── config_utils.py
+│ └── logging_utils.py
+├── tests/
+│ ├── data_preparation/
+│ ├── inference/
+│ └── test_integration.py
 ├── config/
 │ └── config.json
-└── common/
-├── init.py
-└── model_loader.py
+├── run_data_preparation.py
+├── run_inference.py
+├── requirements.txt
+└── .env.example
+```
 
-### Directory Structure Explanation
-- `data_preparation/`: Contains all code related to document processing and indexing
-  - `processors/`: Individual document type processors (PDF, Excel, PPT, Word)
-  - `utils/`: Utility functions for file handling, logging, and indexing
-- `inference/`: Contains code for the query and response pipeline
-  - `services/`: Core services for search, reranking, and LLM interaction
-  - `utils/`: Utility functions for logging and response formatting
-- `common/`: Shared components used by both pipelines
-- `config/`: Configuration files for the application
+## Key Dependencies
 
-## File Structure Details
+- **llama_index**: Core framework for RAG pipeline components
+  - PDFReader for document processing
+  - VectorStoreIndex for vector search
+  - NebiusLLM for language model integration
 
-### Root Directory Files
-- `.env`: Contains actual environment variables and API keys (not tracked in Git)
-  - Stores sensitive configuration like API keys and custom settings
-  - Should never be committed to version control
-  - Created by copying and modifying `.env.example`
+- **Whoosh**: Full-text search engine for keyword-based retrieval
 
-- `.env.example`: Template for environment variables
-  - Provides example configuration without sensitive data
-  - Documents required environment variables:
-    - `API_KEY`: Your Nebius API key
-    - `API_BASE`: Nebius API endpoint URL
-    - `LOG_LEVEL`: Logging verbosity (default: INFO)
-    - `MAX_TOKENS`: Maximum tokens per chunk
-    - `OVERLAP_TOKENS`: Token overlap between chunks
+- **FastAPI & Gradio**: Web interfaces for API and chat interaction
 
-- `.gitignore`: Specifies which files Git should ignore
-  - Excludes sensitive files (.env)
-  - Ignores virtual environment folder (.venv)
-  - Skips cache directories and compiled files
-  - Excludes data and log directories
+- **pytest**: Testing framework for unit and integration tests
 
-- `requirements.txt`: Lists all Python dependencies
-  - FastAPI for REST API (v0.100.0)
-  - Uvicorn for ASGI server (v0.22.0)
-  - Gradio for web interface (v3.50.2)
-  - Document processing libraries (pdfplumber, python-docx, etc.)
-  - Vector search components (FAISS, Whoosh)
-  - LLM integration packages
+## Configuration
 
-- `setup.py`: Package configuration for installation
-  - Defines project metadata
-  - Lists dependencies with version constraints
-  - Enables installation with pip
-  - Configures package discovery
+The pipeline uses a JSON configuration file with the following sections:
 
-- `run_data_preparation.py`: Entry point for data processing
-  - Validates environment setup
-  - Initializes document processors
-  - Manages document ingestion workflow
-  - Creates and updates search indices
+```json
+{
+    "directories": {
+        "to_process_dir": "path/to/input",
+        "processed_dir": "path/to/processed",
+        "log_folder": "path/to/logs",
+        "whoosh_index_path": "path/to/whoosh",
+        "faiss_index_path": "path/to/faiss",
+        "data_directory": "path/to/data"
+    },
+    "chunking": {
+        "max_tokens": 1000,
+        "overlap_tokens": 200
+    },
+    "embedding_model": {
+        "model_name": "sentence-transformers/all-MiniLM-L6-v2"
+    },
+    "llm": {
+        "model_name": "gpt-3.5-turbo",
+        "temperature": 0.1
+    },
+    "reranking": {
+        "cross_encoder_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "threshold": 0.2
+    },
+    "logging": {
+        "data_preparation_log": "data_prep.log",
+        "inference_log": "inference.log",
+        "max_bytes": 10485760,
+        "backup_count": 3,
+        "level": "INFO",
+        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    }
+}
+```
 
-- `run_inference.py`: Entry point for inference service
-  - Launches FastAPI and Gradio servers
-  - Initializes search and LLM services
-  - Manages query processing pipeline
-  - Handles API endpoints
+## Environment Variables
 
-### Directory Contents
+The `.env` file should include:
 
-#### `data_preparation/`
-- `processors/`: Document type-specific processors
-  - `pdf_processor.py`: PDF document handling
-  - `excel_processor.py`: Excel spreadsheet processing
-  - `ppt_processor.py`: PowerPoint presentation parsing
-  - `word_processor.py`: Word document processing
-  
-- `utils/`: Utility functions
-  - `logging_utils.py`: Centralized logging configuration
-  - `file_utils.py`: File operations
-  - `index_utils.py`: Index management
+- `API_KEY`: Your Nebius API key
+- `API_BASE`: Nebius API endpoint URL
+- `LOG_LEVEL`: Logging verbosity (default: INFO)
+- `MAX_TOKENS`: Maximum tokens per chunk
+- `OVERLAP_TOKENS`: Token overlap between chunks
 
-#### `inference/`
-- `services/`: Core service implementations
-  - `search_service.py`: Hybrid search (FAISS + Whoosh)
-  - `reranking_service.py`: Result reranking
-  - `llm_service.py`: LLM interaction
-  
-- `utils/`: Support utilities
-  - `logging_utils.py`: Centralized logging configuration
-  - `response_formatter.py`: Response formatting
+Welcome to the RAG Pipeline repository! This project implements a Retrieval-Augmented Generation (RAG) system designed to process, index, and query various document types (PDF, Excel, PPT, DOCX) using advanced indexing techniques with VectorStoreIndex and Whoosh. Enhanced by Nebius LLM, this pipeline facilitates efficient information retrieval and intelligent response generation tailored for specific domains.
 
-#### `config/`
-- `config.json`: Application configuration
-  - Search parameters
-  - Model settings
-  - Processing options
-
-#### `data/`
-- `to_process/`: Input documents awaiting processing
-- `processed/`: Successfully processed documents
-- `faiss_index/`: FAISS vector indices
-- `whoosh_index/`: Whoosh text indices
-
-#### `logs/`
-- `data_preparation/`: Data processing logs
-- `inference/`: Inference service logs
-- Log files use rotation to manage size
-
-#### `.github/`
-- GitHub-specific configuration
-- Workflow definitions
-- Issue templates
-
-#### `.venv/`
-- Python virtual environment
-- Isolated dependency installation
-- Not tracked in version control
-
-### Generated Directories
-- `rag_pipeline.egg-info/`: Package metadata
-  - Generated during installation
-  - Contains package information
-  - Not tracked in version control
+Features:
+- Multi-Format Document Processing: Supports PDF, Excel, PowerPoint, and Word documents
+- Advanced Indexing: Utilizes VectorStoreIndex for vector-based similarity search and Whoosh for BM25 ranking
+- Chunking Mechanism: Splits large documents into manageable chunks based on token counts and headings
+- Hybrid Search Strategy: Combines vector search and BM25 ranking to enhance retrieval accuracy
+- Cross-Encoder Reranking: Refines search results using a cross-encoder model for improved relevance
+- Interactive Chatbot Interface: Provides a user-friendly Gradio-based chatbot for querying indexed data
+- Logging with Rotation: Implements robust logging mechanisms to monitor pipeline activities
+- Secure Configuration Management: Handles sensitive information securely using configuration files and environment variables
+- Comprehensive Testing: Includes unit and integration tests to ensure reliability and correctness
