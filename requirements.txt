@@ -21,7 +21,12 @@ sentence-transformers==3.3.1
 faiss-cpu==1.9.0.post1
 whoosh==2.7.4
 
-# Optional: Development Tools
+# Development Tools
 black==24.2.0
 isort==5.13.2
-flake8==7.0.0 
+flake8==7.0.0
+
+# Testing Dependencies
+pytest==8.0.0
+pytest-cov==4.1.0
+pytest-mock==3.12.0 
